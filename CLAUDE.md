@@ -7,9 +7,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This repository contains two related parts:
 
 1. **TTP core library** (`ttp/`) — the Python parser that turns template syntax into regex-driven parsing results.
-2. **TTP Web UI** (`backend/` + `frontend/`) — a FastAPI + React app for building templates interactively and testing parse output.
+2. **TTP Web UI** (`backend/` + `frontend/`) — a FastAPI + React app for building templates interactively, testing parse output, and persisting saved templates.
 
-Most automated tests in this repository target the **core library** under `test/pytest/`.
+Most automated tests still target the **core library** under `test/pytest/`, but that directory also contains the Web UI backend regression tests.
 
 ## Common Development Commands
 
@@ -31,6 +31,10 @@ cd test/pytest && poetry run pytest test_misc.py -vv
 # Run one test case
 cd test/pytest && poetry run pytest test_misc.py::test_quick_parse -vv
 
+# Run Web UI backend regression tests
+cd test/pytest && poetry run pytest test_web_ui_template_service.py -vv
+cd test/pytest && poetry run pytest test_web_ui_csv_output.py -vv
+
 # Run pre-commit hooks
 poetry run pre-commit run --all-files
 
@@ -49,6 +53,9 @@ cd backend && pip install -r requirements.txt
 
 # Run FastAPI dev server
 cd backend && python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+
+# Run backend with a custom SQLite database path
+cd backend && TTP_WEB_DB_PATH=./data/ttp_web.dev.db python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Frontend UI (`frontend/`)
@@ -63,7 +70,10 @@ cd frontend && npm run dev -- --host 127.0.0.1 --port 5173
 # Production build
 cd frontend && npm run build
 
-# Lint script exists, but currently no project ESLint config is checked in
+# Preview production build
+cd frontend && npm run preview
+
+# Lint script exists, but there is no checked-in ESLint config in the repo
 cd frontend && npm run lint
 ```
 
@@ -116,23 +126,33 @@ Template execution flow is:
 
 ### 3) FastAPI backend (`backend/app`)
 
-- `app/main.py` sets up FastAPI, CORS, and router registration.
+- `app/main.py` sets up FastAPI, CORS, router registration, and startup initialization for template storage.
 - `app/routers/parse.py` exposes:
   - `POST /api/parse` — parse raw text with a template; optional `name` wraps the template in `<group name="...">`
   - `POST /api/parse/file` — parse uploaded file content
   - `GET /api/patterns` — built-in pattern catalog used by the frontend
+- `app/routers/templates.py` exposes saved-template CRUD under `/api/templates`:
+  - `GET /api/templates`
+  - `POST /api/templates`
+  - `PUT /api/templates/{template_id}`
+  - `DELETE /api/templates/{template_id}`
 - `app/services/ttp_service.py` is the backend integration point to the core parser:
   - runs `ttp(...).parse()`
   - normalizes the nested Python result shape returned by TTP into the simpler JSON shape used by the UI
-  - also returns `csv_result` using TTP's native `csv` formatter so frontend CSV downloads come from TTP output, not client-side reconstruction
-- The backend is stateless; there is no database or server-side template persistence.
+  - returns `csv_result` using TTP output machinery so frontend CSV downloads come from backend-generated formatter output
+- `app/services/template_service.py` is the SQLite persistence layer for saved templates:
+  - uses Python stdlib `sqlite3` only
+  - initializes schema on startup
+  - stores `variables` and `groups` as JSON blobs in a single `templates` table
+  - supports `TTP_WEB_DB_PATH`; default DB path is `backend/data/ttp_web.db`
+- The backend has no general application database beyond the SQLite file used for saved Web UI templates.
 
 ### 4) React frontend (`frontend/src`)
 
 - `App.tsx` is a 2-tab shell:
   - **Template Builder**
   - **Test & Results**
-- On startup, `App.tsx` fetches `/api/patterns` and shows backend connection status in the header.
+- On startup, `App.tsx` fetches both `/api/patterns` and `/api/templates`, and shows backend connection status in the header.
 - Global app state lives in `store/useStore.ts` using Zustand with `persist` storage key `ttp-web-storage`.
 
 #### Template Builder flow
@@ -145,8 +165,13 @@ Template execution flow is:
   - indicator list
   - syntax mode (`variable`, `ignore`, `headers`, `end`)
   - optional `ignoreValue` and `headersColumns`
-- `useStore.ts` centralizes final template generation logic. The UI captures selections, but `generateTemplate()` is what converts variables/groups into final TTP template text.
-- Saved templates are client-side only and persisted in browser storage.
+- `useStore.ts` centralizes final template generation logic. The UI captures selections, but `generateTemplate()` is the source of truth for converting variables/groups into final TTP template text.
+- Saved templates are **backend-backed** now:
+  - `savedTemplates` are fetched from `/api/templates`
+  - `selectedSavedTemplateId` tracks which saved template is currently loaded
+  - `saveTemplate()` does `POST` for new templates and `PUT` for the selected saved template
+  - `loadTemplate()` copies a saved template into the local draft state
+- Unsaved draft/editor state stays in browser storage via Zustand `persist`; saved templates do not.
 
 #### Test & Results flow
 
@@ -167,13 +192,22 @@ Template execution flow is:
 - Axios base URL is `/api`.
 - Development proxy is configured in `frontend/vite.config.ts`.
 - Current Vite proxy target is `http://localhost:8000`, which must match the backend dev server port.
+- Backend responses stay in `snake_case`; `frontend/src/services/api.ts` maps them into the frontend's `camelCase` types.
 
 ## Important Repo-Specific Notes
 
 - **Test working directory matters**: core tests assume execution from `test/pytest/`; fixture paths are relative to that directory.
-- **Frontend commands must run from `frontend/`**: running `npm run dev` from repo root fails because `package.json` is under `frontend/`.
+- **Frontend commands must run from `frontend/`**: running `npm run dev` or `npm run build` from repo root fails because `package.json` is under `frontend/`.
 - **Vite proxy / backend port alignment matters**: frontend development expects `/api` to proxy to `http://localhost:8000`.
-- **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but no project ESLint config is checked in outside `node_modules`, so lint currently fails for configuration reasons rather than app code errors.
+- **Saved template persistence split**:
+  - backend SQLite is the source of truth for `savedTemplates`
+  - browser localStorage still holds the current draft/editor state and other UI convenience state
+  - switching browsers/machines preserves saved templates only if they were saved to backend
+- **Template DB path**: set `TTP_WEB_DB_PATH` to point the Web UI at a different SQLite file; useful for tests and isolated local runs.
+- **Web UI backend tests**:
+  - `test/pytest/test_web_ui_template_service.py` covers SQLite CRUD and `/api/templates`
+  - `test/pytest/test_web_ui_csv_output.py` covers `TTPService` CSV output behavior
+- **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but there is no checked-in ESLint config in the repository, so lint currently fails for configuration reasons rather than app code errors.
 - **When adding new TTP functions**:
   - place the module in the correct `ttp/<scope>/` directory
   - define `_name_map_` if the template-facing name differs from the Python function name

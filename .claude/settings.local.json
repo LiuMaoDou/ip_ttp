@@ -1,0 +1,33 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd:*)",
+      "Bash(curl:*)",
+      "Bash(netstat:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"Stop-Process -Id 18080 -Force\")",
+      "Bash(wmic process:*)",
+      "Bash(for pid:*)",
+      "Bash(npx tsc:*)",
+      "Bash(python:*)",
+      "Bash(npm run:*)",
+      "Bash(npm:*)",
+      "WebFetch(domain:ttp.readthedocs.io)",
+      "Bash(powershell.exe -NoProfile -Command '$ports = @\\(8000,5173\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique; foreach \\($procId in $pids\\) { try { Stop-Process -Id $procId -Force -ErrorAction Stop; Write-Output \\(\"Stopped PID \" + $procId\\) } catch { Write-Output \\(\"Failed PID \" + $procId + \": \" + $_.Exception.Message\\) } }; if \\(-not $pids\\) { Write-Output \"No listeners on 8000/5173\" }')",
+      "Bash(powershell.exe -NoProfile -Command \"$p = Get-CimInstance Win32_Process -Filter 'ProcessId = 22132'; if \\($p\\) { $p | Select-Object ProcessId, Name, CommandLine | Format-List }\")",
+      "Bash(powershell.exe -NoProfile -Command '$p = Get-CimInstance Win32_Process -Filter \"ProcessId = 22132\"; if \\($p\\) { $p | Select-Object ProcessId, Name, CommandLine | Format-List }')",
+      "Bash(powershell.exe -NoProfile -Command '$p = Get-CimInstance Win32_Process -Filter \"ProcessId = 19212\"; if \\($p\\) { $p | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List }')",
+      "Bash(powershell.exe -NoProfile -Command '$connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq 8000 }; $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique; foreach \\($procId in $pids\\) { try { Stop-Process -Id $procId -Force -ErrorAction Stop; Write-Output \\(\"Stopped PID \" + $procId\\) } catch { Write-Output \\(\"Failed PID \" + $procId + \": \" + $_.Exception.Message\\) } }; if \\(-not $pids\\) { Write-Output \"No listener on 8000\" }')",
+      "Bash(powershell.exe -NoProfile -Command '$connections = Get-NetTCPConnection -State Listen -LocalPort 8000 -ErrorAction SilentlyContinue; if \\(-not $connections\\) { Write-Output \"No listener on 8000\"; exit 0 }; foreach \\($conn in $connections\\) { $proc = Get-Process -Id $conn.OwningProcess -ErrorAction SilentlyContinue; if \\($proc\\) { Write-Output \\(\\(\"PID=\" + $conn.OwningProcess + \" Name=\" + $proc.ProcessName + \" Port=\" + $conn.LocalPort\\)\\) } else { Write-Output \\(\\(\"PID=\" + $conn.OwningProcess + \" Port=\" + $conn.LocalPort + \" \\(process not found\\)\"\\)\\) } }')",
+      "Bash(powershell.exe -NoProfile -Command '$procs = Get-CimInstance Win32_Process | Where-Object { $_.Name -match \"python\" -and $_.CommandLine -match \"uvicorn|app.main:app|backend\" }; if \\($procs\\) { $procs | Select-Object ProcessId, ParentProcessId, Name, CommandLine | Format-List } else { Write-Output \"No matching python processes\" }')",
+      "Bash(powershell.exe -NoProfile -Command '$ports = @\\(8000,8001,5173\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; if \\(-not $connections\\) { Write-Output \"No listeners\"; exit 0 }; $connections | Sort-Object LocalPort, LocalAddress | ForEach-Object { $proc = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue; $name = if \\($proc\\) { $proc.ProcessName } else { \"<missing>\" }; Write-Output \\(\"Port=\" + $_.LocalPort + \" Addr=\" + $_.LocalAddress + \" PID=\" + $_.OwningProcess + \" Name=\" + $name\\) }')",
+      "Bash(powershell.exe -NoProfile -Command '$ports = @\\(5173,8000,8001,8010\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique; foreach \\($procId in $pids\\) { try { Stop-Process -Id $procId -Force -ErrorAction Stop; Write-Output \\(\"Stopped PID \" + $procId\\) } catch { Write-Output \\(\"Failed PID \" + $procId + \": \" + $_.Exception.Message\\) } }; if \\(-not $pids\\) { Write-Output \"No listeners on 5173/8000/8001/8010\" }')",
+      "Bash(powershell.exe -NoProfile -Command '$ports = @\\(5173,8000,8001,8010\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; if \\(-not $connections\\) { Write-Output \"No listeners on 5173/8000/8001/8010\" } else { $connections | Sort-Object LocalPort | ForEach-Object { Write-Output \\(\\(\"Port=\" + $_.LocalPort + \" PID=\" + $_.OwningProcess\\)\\) } }')",
+      "Bash(powershell.exe -NoProfile -Command 'try { Stop-Process -Id 12248 -Force -ErrorAction Stop; Write-Output \"Stopped PID 12248\" } catch { Write-Output \\(\"Failed PID 12248: \" + $_.Exception.Message\\) }')",
+      "Bash(powershell.exe -NoProfile -Command '$ports = @\\(5173,8000,8001,8010\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; if \\(-not $connections\\) { Write-Output \"No listeners on 5173/8000/8001/8010\" } else { $connections | Sort-Object LocalPort, OwningProcess | ForEach-Object { $proc = Get-CimInstance Win32_Process -Filter \\(\"ProcessId = \" + $_.OwningProcess\\) -ErrorAction SilentlyContinue; $name = if \\($proc\\) { $proc.Name } else { \"<missing>\" }; Write-Output \\(\\(\"Port=\" + $_.LocalPort + \" Addr=\" + $_.LocalAddress + \" PID=\" + $_.OwningProcess + \" Name=\" + $name\\)\\) } }')",
+      "Bash(git add:*)",
+      "Bash(py:*)",
+      "Bash(which poetry:*)"
+    ]
+  }
+}
