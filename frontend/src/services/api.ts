@@ -1,5 +1,4 @@
 import axios from 'axios'
-import { ParseResult, Pattern } from '../store/useStore'
 
 const API_BASE = '/api'
 
@@ -16,7 +15,20 @@ export interface ParseRequest {
   name?: string
 }
 
-export interface ParseResponse {
+export interface ParseResult {
+  success: boolean
+  result?: unknown
+  csvResult?: string
+  error?: string
+  errorType?: string
+}
+
+export interface Pattern {
+  regex: string
+  description: string
+}
+
+interface ParseResponse {
   success: boolean
   result?: unknown
   csv_result?: string
@@ -24,17 +36,79 @@ export interface ParseResponse {
   error_type?: string
 }
 
-export interface PatternsResponse {
+interface PatternsResponse {
   patterns: Record<string, Pattern>
 }
 
-// Parse text data
+export interface SavedTemplate {
+  id: string
+  name: string
+  description: string
+  sampleText: string
+  variables: Array<Record<string, unknown>>
+  groups: Array<Record<string, unknown>>
+  generatedTemplate: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SavedTemplatePayload {
+  name: string
+  description: string
+  sampleText: string
+  variables: Array<Record<string, unknown>>
+  groups: Array<Record<string, unknown>>
+  generatedTemplate: string
+}
+
+interface SavedTemplateResponse {
+  id: string
+  name: string
+  description: string
+  sample_text: string
+  variables: Array<Record<string, unknown>>
+  groups: Array<Record<string, unknown>>
+  generated_template: string
+  created_at: number
+  updated_at: number
+}
+
+interface TemplatesResponse {
+  templates: SavedTemplateResponse[]
+}
+
+function mapSavedTemplate(template: SavedTemplateResponse): SavedTemplate {
+  return {
+    id: template.id,
+    name: template.name,
+    description: template.description,
+    sampleText: template.sample_text,
+    variables: template.variables,
+    groups: template.groups,
+    generatedTemplate: template.generated_template,
+    createdAt: template.created_at,
+    updatedAt: template.updated_at
+  }
+}
+
+function mapSavedTemplatePayload(template: SavedTemplatePayload): Record<string, unknown> {
+  return {
+    name: template.name,
+    description: template.description,
+    sample_text: template.sampleText,
+    variables: template.variables,
+    groups: template.groups,
+    generated_template: template.generatedTemplate
+  }
+}
+
 export async function parseText(data: string, template: string, name?: string): Promise<ParseResult> {
   const response = await api.post<ParseResponse>('/parse', {
     data,
     template,
     name
   })
+
   return {
     success: response.data.success,
     result: response.data.result,
@@ -44,7 +118,6 @@ export async function parseText(data: string, template: string, name?: string): 
   }
 }
 
-// Parse file
 export async function parseFile(file: File, template: string): Promise<ParseResult> {
   const formData = new FormData()
   formData.append('file', file)
@@ -55,6 +128,7 @@ export async function parseFile(file: File, template: string): Promise<ParseResu
       'Content-Type': 'multipart/form-data'
     }
   })
+
   return {
     success: response.data.success,
     result: response.data.result,
@@ -64,8 +138,26 @@ export async function parseFile(file: File, template: string): Promise<ParseResu
   }
 }
 
-// Get available patterns
 export async function getPatterns(): Promise<Record<string, Pattern>> {
   const response = await api.get<PatternsResponse>('/patterns')
   return response.data.patterns
+}
+
+export async function getTemplates(): Promise<SavedTemplate[]> {
+  const response = await api.get<TemplatesResponse>('/templates')
+  return response.data.templates.map(mapSavedTemplate)
+}
+
+export async function createTemplate(template: SavedTemplatePayload): Promise<SavedTemplate> {
+  const response = await api.post<SavedTemplateResponse>('/templates', mapSavedTemplatePayload(template))
+  return mapSavedTemplate(response.data)
+}
+
+export async function updateTemplate(templateId: string, template: SavedTemplatePayload): Promise<SavedTemplate> {
+  const response = await api.put<SavedTemplateResponse>(`/templates/${templateId}`, mapSavedTemplatePayload(template))
+  return mapSavedTemplate(response.data)
+}
+
+export async function deleteTemplate(templateId: string): Promise<void> {
+  await api.delete(`/templates/${templateId}`)
 }

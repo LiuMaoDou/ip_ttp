@@ -1,7 +1,146 @@
 """TTP Service - Wraps TTP library for parsing operations."""
+from copy import deepcopy
 from typing import Any, Optional
+
 from ttp import ttp
 from ttp.patterns import get_pattern
+from ttp.ttp import _outputter_class
+
+
+def _normalize_result(raw_result: Any) -> Any:
+    """Mirror the existing API result unwrapping behavior."""
+    normalized_result = raw_result
+    for _ in range(2):
+        if isinstance(normalized_result, list) and normalized_result:
+            normalized_result = normalized_result[0]
+    return normalized_result
+
+
+def _is_tabular_row(value: Any) -> bool:
+    """Return True when value can be represented as a flat table row."""
+    return isinstance(value, dict) and bool(value) and all(
+        not isinstance(item, (dict, list)) for item in value.values()
+    )
+
+
+def _is_list_of_tabular_rows(value: Any) -> bool:
+    """Return True when value is a non-empty list of flat dictionaries."""
+    return isinstance(value, list) and bool(value) and all(
+        _is_tabular_row(item) for item in value
+    )
+
+
+def _is_dict_of_tabular_rows(value: Any) -> bool:
+    """Return True when value is a non-empty dict of flat dictionaries."""
+    return isinstance(value, dict) and bool(value) and all(
+        _is_tabular_row(item) for item in value.values()
+    )
+
+
+def _singularize(name: str) -> str:
+    """Best-effort singularization for generated key column names."""
+    if name.endswith("ies") and len(name) > 3:
+        return name[:-3] + "y"
+    if name.endswith("s") and len(name) > 1 and not name.endswith("ss"):
+        return name[:-1]
+    return name
+
+
+def _choose_key_name(path: list[str], rows: list[dict[str, Any]]) -> str:
+    """Pick a non-conflicting key column name for dict-of-dicts data."""
+    existing_headers = {header for row in rows for header in row}
+    candidates = []
+
+    if path:
+        candidates.append(_singularize(path[-1]))
+        candidates.append(f"{path[-1]}_key")
+
+    candidates.extend(["key", "item_key"])
+
+    for candidate in candidates:
+        if candidate and candidate not in existing_headers:
+            return candidate
+
+    suffix = 1
+    while f"key_{suffix}" in existing_headers:
+        suffix += 1
+    return f"key_{suffix}"
+
+
+def _collect_headers(rows: list[dict[str, Any]], key_name: Optional[str] = None) -> list[str]:
+    """Collect CSV headers in a stable order."""
+    headers: list[str] = []
+    seen: set[str] = set()
+
+    if key_name:
+        headers.append(key_name)
+        seen.add(key_name)
+
+    for row in rows:
+        for header in row:
+            if header not in seen:
+                headers.append(header)
+                seen.add(header)
+
+    return headers
+
+
+def _find_tabular_candidates(
+    data: Any, path: Optional[list[str]] = None
+) -> list[dict[str, Any]]:
+    """Find tabular data candidates addressable by the TTP table formatter."""
+    current_path = path or []
+
+    if _is_list_of_tabular_rows(data):
+        return [{"path": current_path, "rows": data, "key": None}]
+
+    if _is_dict_of_tabular_rows(data):
+        if not current_path and len(data) == 1:
+            return []
+        key_name = _choose_key_name(current_path, list(data.values()))
+        rows = [{key_name: item_key, **row} for item_key, row in data.items()]
+        return [{"path": current_path, "rows": rows, "key": key_name}]
+
+    if isinstance(data, dict):
+        candidates = []
+        for key, value in data.items():
+            candidates.extend(_find_tabular_candidates(value, current_path + [key]))
+        return candidates
+
+    return []
+
+
+def _choose_candidate(candidates: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Pick a single safe table candidate or return None when ambiguous."""
+    if len(candidates) != 1:
+        return None
+    return candidates[0]
+
+
+def _format_csv_from_normalized_result(parser: ttp, normalized_result: Any) -> str:
+    """Run TTP's native CSV formatter against normalized API results."""
+    candidate = _choose_candidate(_find_tabular_candidates(deepcopy(normalized_result)))
+    if not candidate:
+        return ""
+
+    headers = _collect_headers(candidate["rows"], candidate["key"])
+    if not headers:
+        return ""
+
+    outputter = _outputter_class(
+        _ttp_=parser._ttp_,
+        format="csv",
+        returner="self",
+        headers=headers,
+        missing="",
+    )
+
+    if candidate["path"]:
+        outputter.attributes["path"] = candidate["path"]
+    if candidate["key"]:
+        outputter.attributes["key"] = candidate["key"]
+
+    return outputter.run(deepcopy(normalized_result))
 
 
 class TTPService:
@@ -71,20 +210,14 @@ class TTPService:
             parser = ttp(data=data, template=template)
             parser.parse()
 
-            result = parser.result()
-            csv_result = parser.result(format="csv", returner="self")
-
-            if isinstance(result, list) and len(result) > 0:
-                result = result[0]
-                if isinstance(result, list) and len(result) > 0:
-                    result = result[0]
-
-            csv_output = csv_result[0] if isinstance(csv_result, list) and len(csv_result) > 0 else ""
+            raw_result = parser.result()
+            normalized_result = _normalize_result(raw_result)
+            csv_result = _format_csv_from_normalized_result(parser, normalized_result)
 
             return {
                 "success": True,
-                "result": result,
-                "csv_result": csv_output
+                "result": normalized_result,
+                "csv_result": csv_result,
             }
         except Exception as e:
             return {

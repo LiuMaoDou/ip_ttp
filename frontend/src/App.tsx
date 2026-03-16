@@ -10,27 +10,28 @@ export default function App() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking')
 
-  const { setPatterns, theme, toggleTheme } = useStore()
+  const { setPatterns, fetchSavedTemplates, theme, toggleTheme } = useStore()
 
   // Apply theme to document
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
-  // Load patterns on mount
+  // Load patterns and saved templates on mount
   useEffect(() => {
-    const loadPatterns = async () => {
+    const loadAppData = async () => {
       try {
         const patterns = await getPatterns()
         setPatterns(patterns)
+        await fetchSavedTemplates()
         setBackendStatus('connected')
       } catch (error) {
-        console.error('Failed to load patterns:', error)
+        console.error('Failed to load app data:', error)
         setBackendStatus('error')
       }
     }
-    loadPatterns()
-  }, [setPatterns])
+    void loadAppData()
+  }, [fetchSavedTemplates, setPatterns])
 
   const tabs: { id: Tab; label: string; icon: JSX.Element }[] = [
     {

@@ -47,6 +47,8 @@ export default function TemplateBuilder() {
   const [templateNameInput, setTemplateNameInput] = useState('')
   const [templateDescInput, setTemplateDescInput] = useState('')
   const [isEditorReady, setIsEditorReady] = useState(false)
+  const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [isDeletingTemplateId, setIsDeletingTemplateId] = useState<string | null>(null)
 
   const {
     sampleText,
@@ -59,7 +61,6 @@ export default function TemplateBuilder() {
     addGroup,
     removeGroup,
     setTemplateName,
-    generateTemplate,
     clearVariables,
     patterns,
     savedTemplates,
@@ -67,6 +68,8 @@ export default function TemplateBuilder() {
     loadTemplate,
     deleteTemplate,
     templateName,
+    selectedSavedTemplateId,
+    isLoadingTemplates,
     theme
   } = useStore()
 
@@ -406,48 +409,66 @@ export default function TemplateBuilder() {
     setTemplateNameInput(templateName || '')
   }, [variables, groups, templateName])
 
-  const handleSaveTemplate = useCallback(() => {
+  const handleSaveTemplate = useCallback(async () => {
     if (variables.length === 0 && groups.length === 0) {
       alert('Please add at least one variable or group')
       return
     }
-    // If template already has a name, save directly
+
     if (templateName) {
-      saveTemplate(templateName, '')
+      setIsSavingTemplate(true)
+      try {
+        await saveTemplate(templateName, '')
+      } finally {
+        setIsSavingTemplate(false)
+      }
     } else {
-      // Otherwise show modal to input name
       setTemplateNameInput('')
+      setTemplateDescInput('')
       setShowSaveModal(true)
     }
   }, [variables, groups, templateName, saveTemplate])
 
-  const handleSaveSubmit = useCallback(() => {
+  const handleSaveSubmit = useCallback(async () => {
     const name = templateNameInput || 'untitled'
-    saveTemplate(name, templateDescInput)
-    setShowSaveModal(false)
-    setTemplateNameInput('')
-    setTemplateDescInput('')
+    setIsSavingTemplate(true)
+    try {
+      await saveTemplate(name, templateDescInput)
+      setShowSaveModal(false)
+      setTemplateNameInput('')
+      setTemplateDescInput('')
+    } finally {
+      setIsSavingTemplate(false)
+    }
   }, [templateNameInput, templateDescInput, saveTemplate])
 
-  const handleTemplateNameSubmit = useCallback(() => {
+  const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
     setTemplateName(name)
-    generateTemplate()
-    // Auto-save the template
-    saveTemplate(name, templateDescInput)
-    setShowTemplateNameModal(false)
-    setTemplateNameInput('')
-    setTemplateDescInput('')
-  }, [templateNameInput, templateDescInput, setTemplateName, generateTemplate, saveTemplate])
+    setIsSavingTemplate(true)
+    try {
+      await saveTemplate(name, templateDescInput)
+      setShowTemplateNameModal(false)
+      setTemplateNameInput('')
+      setTemplateDescInput('')
+    } finally {
+      setIsSavingTemplate(false)
+    }
+  }, [templateNameInput, templateDescInput, setTemplateName, saveTemplate])
 
-  const handleLoadTemplate = useCallback((id: string) => {
-    loadTemplate(id)
+  const handleLoadTemplate = useCallback(async (id: string) => {
+    await loadTemplate(id)
   }, [loadTemplate])
 
-  const handleDeleteTemplate = useCallback((id: string, e: React.MouseEvent) => {
+  const handleDeleteTemplate = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     if (confirm('Delete this template?')) {
-      deleteTemplate(id)
+      setIsDeletingTemplateId(id)
+      try {
+        await deleteTemplate(id)
+      } finally {
+        setIsDeletingTemplateId(null)
+      }
     }
   }, [deleteTemplate])
 
@@ -465,11 +486,11 @@ export default function TemplateBuilder() {
             Clear
           </button>
           <button
-            onClick={handleSaveTemplate}
+            onClick={() => { void handleSaveTemplate() }}
             className="btn"
-            disabled={variables.length === 0 && groups.length === 0}
+            disabled={isSavingTemplate || (variables.length === 0 && groups.length === 0)}
           >
-            Save
+            {isSavingTemplate ? 'Saving...' : 'Save'}
           </button>
           <button
             onClick={handleGenerateTemplate}
@@ -487,50 +508,59 @@ export default function TemplateBuilder() {
         <div className="w-56 border-r overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <div className="p-2">
             <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Saved Templates ({savedTemplates.length})</h3>
-            {savedTemplates.length === 0 ? (
+            {isLoadingTemplates ? (
+              <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>Loading templates...</p>
+            ) : savedTemplates.length === 0 ? (
               <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>No saved templates</p>
             ) : (
               <div className="space-y-1">
-                {savedTemplates.map((tpl) => (
-                  <div
-                    key={tpl.id}
-                    onClick={() => handleLoadTemplate(tpl.id)}
-                    className="p-2 rounded-md cursor-pointer group transition-colors"
-                    style={{
-                      backgroundColor: templateName === tpl.name ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-                      border: templateName === tpl.name ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
-                    }}
-                    onMouseEnter={(e) => {
-                      if (templateName !== tpl.name) {
-                        e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'
-                      }
-                    }}
-                    onMouseLeave={(e) => {
-                      if (templateName !== tpl.name) {
-                        e.currentTarget.style.backgroundColor = 'transparent'
-                      }
-                    }}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{tpl.name}</p>
-                        <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{tpl.description || 'No description'}</p>
-                        <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                          {tpl.variables.length} variables{(tpl.groups?.length || 0) > 0 && `, ${tpl.groups?.length} groups`}
-                        </p>
+                {savedTemplates.map((tpl) => {
+                  const isSelected = selectedSavedTemplateId === tpl.id
+                  const isDeleting = isDeletingTemplateId === tpl.id
+
+                  return (
+                    <div
+                      key={tpl.id}
+                      onClick={() => { void handleLoadTemplate(tpl.id) }}
+                      className="p-2 rounded-md cursor-pointer group transition-colors"
+                      style={{
+                        backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                        border: isSelected ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent',
+                        opacity: isDeleting ? 0.6 : 1
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!isSelected) {
+                          e.currentTarget.style.backgroundColor = 'transparent'
+                        }
+                      }}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{tpl.name}</p>
+                          <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{tpl.description || 'No description'}</p>
+                          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
+                            {tpl.variables.length} variables{(tpl.groups?.length || 0) > 0 && `, ${tpl.groups?.length} groups`}
+                          </p>
+                        </div>
+                        <button
+                          onClick={(e) => { void handleDeleteTemplate(tpl.id, e) }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity ml-1"
+                          style={{ color: 'var(--text-muted)' }}
+                          disabled={isDeleting}
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                        </button>
                       </div>
-                      <button
-                        onClick={(e) => handleDeleteTemplate(tpl.id, e)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity ml-1"
-                        style={{ color: 'var(--text-muted)' }}
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                        </svg>
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             )}
           </div>
@@ -677,10 +707,11 @@ export default function TemplateBuilder() {
                 Cancel
               </button>
               <button
-                onClick={handleTemplateNameSubmit}
+                onClick={() => { void handleTemplateNameSubmit() }}
                 className="btn"
+                disabled={isSavingTemplate}
               >
-                Generate
+                {isSavingTemplate ? 'Saving...' : 'Generate'}
               </button>
             </div>
           </div>
@@ -716,10 +747,11 @@ export default function TemplateBuilder() {
                 Cancel
               </button>
               <button
-                onClick={handleSaveSubmit}
+                onClick={() => { void handleSaveSubmit() }}
                 className="btn"
+                disabled={isSavingTemplate}
               >
-                Save
+                {isSavingTemplate ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

@@ -1,9 +1,17 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import {
+  createTemplate,
+  deleteTemplate as deleteTemplateRequest,
+  getTemplates,
+  updateTemplate
+} from '../services/api'
+import type { ParseResult, Pattern, SavedTemplate } from '../services/api'
+
+export type { ParseResult, Pattern, SavedTemplate } from '../services/api'
 
 export type VariableSyntaxMode = 'variable' | 'ignore' | 'headers' | 'end'
 
-// Variable definition for template builder
 export interface Variable {
   id: string
   name: string
@@ -20,7 +28,6 @@ export interface Variable {
   colorIndex: number
 }
 
-// Group definition for template builder
 export interface Group {
   id: string
   name: string
@@ -29,7 +36,6 @@ export interface Group {
   colorIndex: number
 }
 
-// Uploaded file
 export interface UploadedFile {
   id: string
   name: string
@@ -37,16 +43,6 @@ export interface UploadedFile {
   content: string
 }
 
-// Parse result
-export interface ParseResult {
-  success: boolean
-  result?: unknown
-  csvResult?: string
-  error?: string
-  errorType?: string
-}
-
-// File parse result for multi-file parsing
 export interface FileParseResult {
   fileId: string
   fileName: string
@@ -59,54 +55,31 @@ export interface FileParseResult {
   errorType?: string
 }
 
-// Pattern definition
-export interface Pattern {
-  regex: string
-  description: string
-}
-
-// Saved template
-export interface SavedTemplate {
-  id: string
-  name: string
-  description: string
-  sampleText: string
-  variables: Variable[]
-  groups: Group[]
-  generatedTemplate: string
-  createdAt: number
-}
-
 interface AppState {
-  // Theme
   theme: 'light' | 'dark'
 
-  // Template Builder
   sampleText: string
   variables: Variable[]
   groups: Group[]
   generatedTemplate: string
   templateName: string
+  selectedSavedTemplateId: string | null
 
-  // Saved Templates
   savedTemplates: SavedTemplate[]
+  isLoadingTemplates: boolean
 
-  // File Input
   files: UploadedFile[]
   selectedFileId: string | null
   inputText: string
 
-  // Test Results
   parseResult: ParseResult | null
   fileResults: FileParseResult[]
   selectedResultIndex: number
   selectedTestFileIds: string[] | null
   isParsing: boolean
 
-  // Patterns from backend
   patterns: Record<string, Pattern>
 
-  // Actions - Template Builder
   setSampleText: (text: string) => void
   addVariable: (variable: Omit<Variable, 'id' | 'colorIndex'>) => void
   removeVariable: (id: string) => void
@@ -114,21 +87,19 @@ interface AppState {
   addGroup: (group: Omit<Group, 'id' | 'colorIndex'>) => void
   removeGroup: (id: string) => void
   setTemplateName: (name: string) => void
-  generateTemplate: () => void
+  generateTemplate: () => string
   clearVariables: () => void
 
-  // Actions - Saved Templates
-  saveTemplate: (name: string, description: string) => void
-  loadTemplate: (id: string) => void
-  deleteTemplate: (id: string) => void
+  fetchSavedTemplates: () => Promise<void>
+  saveTemplate: (name: string, description: string) => Promise<void>
+  loadTemplate: (id: string) => Promise<void>
+  deleteTemplate: (id: string) => Promise<void>
 
-  // Actions - File Input
   addFile: (file: UploadedFile) => void
   removeFile: (id: string) => void
   selectFile: (id: string | null) => void
   setInputText: (text: string) => void
 
-  // Actions - Test Results
   setParseResult: (result: ParseResult | null) => void
   setFileResults: (results: FileParseResult[]) => void
   setSelectedResultIndex: (index: number) => void
@@ -136,31 +107,46 @@ interface AppState {
   clearFileResults: () => void
   setIsParsing: (isParsing: boolean) => void
 
-  // Actions - Patterns
   setPatterns: (patterns: Record<string, Pattern>) => void
 
-  // Actions - Theme
   toggleTheme: () => void
   setTheme: (theme: 'light' | 'dark') => void
 }
 
-// Color palette for variables (12 colors)
 const VARIABLE_COLORS = [
   '#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4',
   '#ec4899', '#84cc16', '#6366f1', '#14b8a6', '#f97316', '#8b5cf6'
 ]
 
+function createVariableId() {
+  return `var-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+function createGroupId() {
+  return `grp-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
+}
+
+function toSavedTemplatePayload(state: Pick<AppState, 'sampleText' | 'variables' | 'groups' | 'generatedTemplate'>) {
+  return {
+    sampleText: state.sampleText,
+    variables: state.variables as unknown as Array<Record<string, unknown>>,
+    groups: state.groups as unknown as Array<Record<string, unknown>>,
+    generatedTemplate: state.generatedTemplate
+  }
+}
+
 export const useStore = create<AppState>()(
   persist(
     (set, get) => ({
-      // Initial state
       theme: 'dark',
       sampleText: '',
       variables: [],
       groups: [],
       generatedTemplate: '',
       templateName: '',
+      selectedSavedTemplateId: null,
       savedTemplates: [],
+      isLoadingTemplates: false,
       files: [],
       selectedFileId: null,
       inputText: '',
@@ -171,7 +157,6 @@ export const useStore = create<AppState>()(
       isParsing: false,
       patterns: {},
 
-      // Template Builder Actions
       setSampleText: (text) => set({ sampleText: text }),
 
       addVariable: (variable) => {
@@ -179,7 +164,7 @@ export const useStore = create<AppState>()(
         const colorIndex = state.variables.length % VARIABLE_COLORS.length
         const newVariable: Variable = {
           ...variable,
-          id: `var-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: createVariableId(),
           colorIndex
         }
         set({ variables: [...state.variables, newVariable] })
@@ -204,7 +189,7 @@ export const useStore = create<AppState>()(
         const colorIndex = state.groups.length % VARIABLE_COLORS.length
         const newGroup: Group = {
           ...group,
-          id: `grp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: createGroupId(),
           colorIndex
         }
         set({ groups: [...state.groups, newGroup] })
@@ -222,11 +207,9 @@ export const useStore = create<AppState>()(
         const state = get()
         const { sampleText, variables, groups } = state
 
-        console.log('generateTemplate called with:', { variables: variables.length, groupsCount: groups.length, groups })
-
         if (variables.length === 0 && groups.length === 0) {
           set({ generatedTemplate: sampleText })
-          return
+          return sampleText
         }
 
         const sortedVars = [...variables].sort((a, b) => {
@@ -374,70 +357,91 @@ export const useStore = create<AppState>()(
         }
 
         const generatedTemplate = result.join('\n')
-        console.log('Generated template:', generatedTemplate)
         set({ generatedTemplate })
+        return generatedTemplate
       },
 
-      clearVariables: () => set({ variables: [], groups: [], generatedTemplate: '', templateName: '' }),
+      clearVariables: () => set({
+        variables: [],
+        groups: [],
+        generatedTemplate: '',
+        templateName: '',
+        selectedSavedTemplateId: null
+      }),
 
-      // Saved Templates Actions
-      saveTemplate: (name, description) => {
-        const state = get()
-        const existingIndex = state.savedTemplates.findIndex(t => t.name === name)
-
-        if (existingIndex >= 0) {
-          // Update existing template
-          const updatedTemplates = [...state.savedTemplates]
-          updatedTemplates[existingIndex] = {
-            ...updatedTemplates[existingIndex],
-            description: description || updatedTemplates[existingIndex].description,
-            sampleText: state.sampleText,
-            variables: state.variables,
-            groups: state.groups,
-            generatedTemplate: state.generatedTemplate,
-            createdAt: Date.now()
-          }
-          set({ savedTemplates: updatedTemplates })
-        } else {
-          // Create new template
-          const newTemplate: SavedTemplate = {
-            id: `tpl-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-            name,
-            description,
-            sampleText: state.sampleText,
-            variables: state.variables,
-            groups: state.groups,
-            generatedTemplate: state.generatedTemplate,
-            createdAt: Date.now()
-          }
-          set({ savedTemplates: [...state.savedTemplates, newTemplate] })
+      fetchSavedTemplates: async () => {
+        set({ isLoadingTemplates: true })
+        try {
+          const savedTemplates = await getTemplates()
+          set({ savedTemplates })
+        } finally {
+          set({ isLoadingTemplates: false })
         }
       },
 
-      loadTemplate: (id) => {
+      saveTemplate: async (name, description) => {
+        set({ templateName: name })
+        const generatedTemplate = get().generateTemplate()
         const state = get()
-        const template = state.savedTemplates.find(t => t.id === id)
-        if (template) {
-          set({
-            sampleText: template.sampleText,
-            variables: template.variables,
-            groups: template.groups || [],
-            generatedTemplate: template.generatedTemplate,
-            templateName: template.name
+        const currentSavedTemplate = state.selectedSavedTemplateId
+          ? state.savedTemplates.find((template) => template.id === state.selectedSavedTemplateId)
+          : null
+        const payload = {
+          name,
+          description: description || currentSavedTemplate?.description || '',
+          ...toSavedTemplatePayload({
+            sampleText: state.sampleText,
+            variables: state.variables,
+            groups: state.groups,
+            generatedTemplate
           })
-          // Always regenerate template after loading to ensure it's up to date
-          // This handles cases where template was saved without generating
-          get().generateTemplate()
+        }
+
+        let savedTemplateId = state.selectedSavedTemplateId
+
+        if (savedTemplateId) {
+          const updatedTemplate = await updateTemplate(savedTemplateId, payload)
+          savedTemplateId = updatedTemplate.id
+        } else {
+          const createdTemplate = await createTemplate(payload)
+          savedTemplateId = createdTemplate.id
+        }
+
+        await get().fetchSavedTemplates()
+
+        set({
+          templateName: name,
+          selectedSavedTemplateId: savedTemplateId
+        })
+      },
+
+      loadTemplate: async (id) => {
+        const state = get()
+        const template = state.savedTemplates.find((savedTemplate) => savedTemplate.id === id)
+        if (!template) {
+          return
+        }
+
+        set({
+          sampleText: template.sampleText,
+          variables: template.variables as unknown as Variable[],
+          groups: (template.groups || []) as unknown as Group[],
+          generatedTemplate: template.generatedTemplate,
+          templateName: template.name,
+          selectedSavedTemplateId: template.id
+        })
+      },
+
+      deleteTemplate: async (id) => {
+        await deleteTemplateRequest(id)
+        const wasSelected = get().selectedSavedTemplateId === id
+        await get().fetchSavedTemplates()
+
+        if (wasSelected) {
+          set({ selectedSavedTemplateId: null })
         }
       },
 
-      deleteTemplate: (id) => {
-        set((state) => ({
-          savedTemplates: state.savedTemplates.filter(t => t.id !== id)
-        }))
-      },
-
-      // File Input Actions
       addFile: (file) => {
         set((state) => ({
           files: [...state.files, file]
@@ -464,7 +468,6 @@ export const useStore = create<AppState>()(
 
       setInputText: (text) => set({ inputText: text }),
 
-      // Test Results Actions
       setParseResult: (result) => set({ parseResult: result }),
       setFileResults: (results) => set({ fileResults: results, selectedResultIndex: 0 }),
       setSelectedResultIndex: (index) => set({ selectedResultIndex: index }),
@@ -476,10 +479,8 @@ export const useStore = create<AppState>()(
       clearFileResults: () => set({ fileResults: [], selectedResultIndex: 0 }),
       setIsParsing: (isParsing) => set({ isParsing }),
 
-      // Patterns Actions
       setPatterns: (patterns) => set({ patterns }),
 
-      // Theme Actions
       toggleTheme: () => {
         const newTheme = get().theme === 'dark' ? 'light' : 'dark'
         set({ theme: newTheme })
@@ -495,7 +496,7 @@ export const useStore = create<AppState>()(
         groups: state.groups,
         generatedTemplate: state.generatedTemplate,
         templateName: state.templateName,
-        savedTemplates: state.savedTemplates,
+        selectedSavedTemplateId: state.selectedSavedTemplateId,
         inputText: state.inputText,
         files: state.files,
         selectedFileId: state.selectedFileId,
@@ -507,7 +508,6 @@ export const useStore = create<AppState>()(
   )
 )
 
-// Export colors for components
 export const getVariableColor = (index: number): string => {
   return VARIABLE_COLORS[index % VARIABLE_COLORS.length]
 }

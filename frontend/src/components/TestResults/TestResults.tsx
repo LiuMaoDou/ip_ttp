@@ -54,6 +54,7 @@ export default function TestResults() {
   const {
     generatedTemplate,
     savedTemplates,
+    isLoadingTemplates,
     templateName,
     files,
     addFile,
@@ -367,7 +368,7 @@ export default function TestResults() {
   const currentResult = fileResults[selectedResultIndex] || fileResults[0]
   const successfulCount = fileResults.filter((result) => result.success).length
   const failedCount = fileResults.filter((result) => result.success === false).length
-  const canRun = selectedTemplates.length > 0 && (selectedFiles.length > 0 || (!files.length && !!inputText.trim()))
+  const canRun = !isLoadingTemplates && selectedTemplates.length > 0 && (selectedFiles.length > 0 || (!files.length && !!inputText.trim()))
 
   return (
     <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
@@ -448,7 +449,11 @@ export default function TestResults() {
                 {selectedTemplates.length}/{templateOptions.length}
               </span>
             </div>
-            {templateOptions.length === 0 ? (
+            {isLoadingTemplates ? (
+              <p className="text-sm px-1 py-3 text-center" style={{ color: 'var(--text-muted)' }}>
+                Loading templates...
+              </p>
+            ) : templateOptions.length === 0 ? (
               <p className="text-sm px-1 py-3 text-center" style={{ color: 'var(--text-muted)' }}>
                 No templates
               </p>
