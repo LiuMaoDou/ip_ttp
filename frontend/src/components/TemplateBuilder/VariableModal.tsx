@@ -1,9 +1,11 @@
 import { useMemo, useState, useEffect } from 'react'
-import { Pattern, VariableSyntaxMode } from '../../store/useStore'
+import type { Pattern, Variable, VariableSyntaxMode } from '../../store/useStore'
 
 interface VariableModalProps {
+  mode: 'create' | 'edit'
   selectedText: string
   patterns: Record<string, Pattern>
+  initialVariable?: Variable | null
   onConfirm: (
     name: string,
     pattern: string,
@@ -60,7 +62,39 @@ const SYNTAX_MODE_OPTIONS: { value: VariableSyntaxMode; label: string; descripti
   }
 ]
 
-export default function VariableModal({ selectedText, patterns, onConfirm, onCancel }: VariableModalProps) {
+function getDefaultVariableName(selectedText: string) {
+  const defaultName = selectedText
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_|_$/g, '')
+    .substring(0, 20)
+
+  return defaultName || 'variable'
+}
+
+function getDefaultPattern(selectedText: string) {
+  const trimmedText = selectedText.trim()
+
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(trimmedText)) {
+    return 'IP'
+  }
+
+  if (/^\d+$/.test(trimmedText)) {
+    return 'DIGIT'
+  }
+
+  if (/^[0-9a-fA-F]{2}([:-])[0-9a-fA-F]{2}(\1[0-9a-fA-F]{2}){4}$/.test(trimmedText)) {
+    return 'MAC'
+  }
+
+  if (/^\S+$/.test(trimmedText)) {
+    return 'WORD'
+  }
+
+  return 'ORPHRASE'
+}
+
+export default function VariableModal({ mode, selectedText, patterns, initialVariable, onConfirm, onCancel }: VariableModalProps) {
   const [name, setName] = useState('')
   const [pattern, setPattern] = useState('')
   const [indicators, setIndicators] = useState<string[]>([])
@@ -70,35 +104,26 @@ export default function VariableModal({ selectedText, patterns, onConfirm, onCan
   const [isIndicatorMenuOpen, setIsIndicatorMenuOpen] = useState(false)
 
   useEffect(() => {
-    const defaultName = selectedText
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_')
-      .replace(/^_|_$/g, '')
-      .substring(0, 20)
-    setName(defaultName || 'variable')
-  }, [selectedText])
+    const isEditMode = mode === 'edit'
 
-  useEffect(() => {
-    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(selectedText.trim())) {
-      setPattern('IP')
-    } else if (/^\d+$/.test(selectedText.trim())) {
-      setPattern('DIGIT')
-    } else if (/^[0-9a-fA-F]{2}([:-])[0-9a-fA-F]{2}(\1[0-9a-fA-F]{2}){4}$/.test(selectedText.trim())) {
-      setPattern('MAC')
-    } else if (/^\S+$/.test(selectedText.trim())) {
-      setPattern('WORD')
-    } else {
-      setPattern('ORPHRASE')
-    }
-  }, [selectedText])
-
-  useEffect(() => {
-    setIndicators([])
-    setSyntaxMode('variable')
-    setIgnoreValue('')
-    setHeadersColumns('')
+    setName(isEditMode ? (initialVariable?.name || 'variable') : getDefaultVariableName(selectedText))
+    setPattern(isEditMode ? (initialVariable?.pattern || '') : getDefaultPattern(selectedText))
+    setIndicators(isEditMode ? (initialVariable?.indicators || []) : [])
+    setSyntaxMode(isEditMode ? (initialVariable?.syntaxMode || 'variable') : 'variable')
+    setIgnoreValue(isEditMode ? (initialVariable?.ignoreValue || '') : '')
+    setHeadersColumns(
+      isEditMode && initialVariable?.headersColumns != null
+        ? String(initialVariable.headersColumns)
+        : ''
+    )
     setIsIndicatorMenuOpen(false)
-  }, [selectedText])
+  }, [mode, selectedText, initialVariable])
+
+  useEffect(() => {
+    if (syntaxMode !== 'variable') {
+      setIsIndicatorMenuOpen(false)
+    }
+  }, [syntaxMode])
 
   const toggleIndicator = (value: string) => {
     setIndicators((prev) => (
@@ -115,14 +140,23 @@ export default function VariableModal({ selectedText, patterns, onConfirm, onCan
     }
 
     const parsedColumns = headersColumns.trim() ? Number(headersColumns.trim()) : null
+    const normalizedIndicators = syntaxMode === 'variable' ? indicators : []
+    const normalizedIgnoreValue = syntaxMode === 'ignore' ? (ignoreValue.trim() || undefined) : undefined
+    const normalizedHeadersColumns = syntaxMode === 'headers'
+      && parsedColumns !== null
+      && Number.isFinite(parsedColumns)
+      && parsedColumns > 0
+      ? parsedColumns
+      : null
+
     onConfirm(
       name.trim() || 'variable',
       pattern,
-      indicators,
+      normalizedIndicators,
       syntaxMode,
       {
-        ignoreValue: ignoreValue.trim() || undefined,
-        headersColumns: parsedColumns && parsedColumns > 0 ? parsedColumns : null
+        ignoreValue: normalizedIgnoreValue,
+        headersColumns: normalizedHeadersColumns
       }
     )
   }
@@ -158,11 +192,14 @@ export default function VariableModal({ selectedText, patterns, onConfirm, onCan
   const isVariableMode = syntaxMode === 'variable'
   const isIgnoreMode = syntaxMode === 'ignore'
   const isHeadersMode = syntaxMode === 'headers'
+  const isEditMode = mode === 'edit'
 
   return (
     <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
       <div className="rounded-lg p-6 w-[560px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-        <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Add Variable</h3>
+        <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
+          {isEditMode ? 'Edit Variable' : 'Add Variable'}
+        </h3>
 
         <form onSubmit={handleSubmit}>
           <div className="mb-4 p-3 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
@@ -340,7 +377,7 @@ export default function VariableModal({ selectedText, patterns, onConfirm, onCan
               type="submit"
               className="btn btn-primary"
             >
-              Add Variable
+              {isEditMode ? 'Save Changes' : 'Add Variable'}
             </button>
           </div>
         </form>

@@ -1,16 +1,12 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
-import type { editor } from 'monaco-editor'
-import { useStore, getVariableColor } from '../../store/useStore'
+import type { editor, IRange, IDisposable } from 'monaco-editor'
+import { useStore, getVariableColor, type Variable, type VariableSyntaxMode } from '../../store/useStore'
 import VariableModal from './VariableModal'
 import GroupModal from './GroupModal'
 import VariableList from './VariableList'
 
-// Variable color palette
-const VARIABLE_COLORS = [
-  '#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4',
-  '#ec4899', '#84cc16', '#6366f1', '#14b8a6', '#f97316', '#8b5cf6'
-]
+const VARIABLE_COLORS = Array.from({ length: 12 }, (_, index) => getVariableColor(index))
 
 // Group color palette (distinct from variables)
 const GROUP_COLOR = '#f97316'
@@ -31,16 +27,135 @@ interface GroupSelection {
   endLine: number
 }
 
+interface MonacoRangeShape {
+  startLineNumber: number
+  startColumn: number
+  endLineNumber: number
+  endColumn: number
+}
+
+function isRangeOrdered(range: MonacoRangeShape): boolean {
+  if (range.startLineNumber < range.endLineNumber) {
+    return true
+  }
+
+  if (range.startLineNumber > range.endLineNumber) {
+    return false
+  }
+
+  return range.startColumn <= range.endColumn
+}
+
+function isRangeWithinModel(model: editor.ITextModel, range: MonacoRangeShape): boolean {
+  const lineCount = model.getLineCount()
+  if (
+    range.startLineNumber < 1 ||
+    range.endLineNumber < 1 ||
+    range.startLineNumber > lineCount ||
+    range.endLineNumber > lineCount ||
+    range.startColumn < 1 ||
+    range.endColumn < 1 ||
+    !isRangeOrdered(range)
+  ) {
+    return false
+  }
+
+  const startMaxColumn = model.getLineMaxColumn(range.startLineNumber)
+  const endMaxColumn = model.getLineMaxColumn(range.endLineNumber)
+
+  return range.startColumn <= startMaxColumn && range.endColumn <= endMaxColumn
+}
+
+function isCollapsedRange(range: MonacoRangeShape): boolean {
+  return (
+    range.startLineNumber === range.endLineNumber &&
+    range.startColumn === range.endColumn
+  )
+}
+
+function createRange(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel,
+  range: MonacoRangeShape
+): IRange | null {
+  if (!isRangeWithinModel(model, range)) {
+    return null
+  }
+
+  return new monaco.Range(
+    range.startLineNumber,
+    range.startColumn,
+    range.endLineNumber,
+    range.endColumn
+  )
+}
+
+function getVariableTrackingRange(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel,
+  variable: Variable
+): IRange | null {
+  return createRange(monaco, model, {
+    startLineNumber: variable.startLine,
+    startColumn: variable.startColumn,
+    endLineNumber: variable.endLine,
+    endColumn: variable.endColumn
+  })
+}
+
+function getVariableVisibleRange(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel,
+  variable: Variable
+): IRange | null {
+  const range = getVariableTrackingRange(monaco, model, variable)
+  if (!range || isCollapsedRange(range)) {
+    return null
+  }
+
+  return range
+}
+
+function getGroupTrackingRange(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel,
+  group: { startLine: number; endLine: number }
+): IRange | null {
+  const lineCount = model.getLineCount()
+  if (
+    group.startLine < 1 ||
+    group.endLine < 1 ||
+    group.startLine > group.endLine ||
+    group.startLine > lineCount ||
+    group.endLine > lineCount
+  ) {
+    return null
+  }
+
+  return new monaco.Range(
+    group.startLine,
+    1,
+    group.endLine,
+    model.getLineMaxColumn(group.endLine)
+  )
+}
+
 export default function TemplateBuilder() {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null)
   const decorationsRef = useRef<string[]>([])
+  const variableTrackingDecorationsRef = useRef<Record<string, string>>({})
+  const groupTrackingDecorationsRef = useRef<Record<string, string>>({})
+  const suppressTrackingSyncRef = useRef(false)
+  const contentChangeDisposableRef = useRef<IDisposable | null>(null)
+  const modelChangeDisposableRef = useRef<IDisposable | null>(null)
   const generatedEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const generatedMonacoRef = useRef<typeof import('monaco-editor') | null>(null)
 
   const [showModal, setShowModal] = useState(false)
   const [showGroupModal, setShowGroupModal] = useState(false)
   const [currentSelection, setCurrentSelection] = useState<CurrentSelection | null>(null)
+  const [editingVariable, setEditingVariable] = useState<Variable | null>(null)
   const [groupSelection, setGroupSelection] = useState<GroupSelection | null>(null)
   const [showTemplateNameModal, setShowTemplateNameModal] = useState(false)
   const [showSaveModal, setShowSaveModal] = useState(false)
@@ -49,6 +164,7 @@ export default function TemplateBuilder() {
   const [isEditorReady, setIsEditorReady] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const [isDeletingTemplateId, setIsDeletingTemplateId] = useState<string | null>(null)
+  const pendingSyncFrameRef = useRef<number | null>(null)
 
   const {
     sampleText,
@@ -57,6 +173,7 @@ export default function TemplateBuilder() {
     groups,
     generatedTemplate,
     addVariable,
+    updateVariable,
     removeVariable,
     addGroup,
     removeGroup,
@@ -73,17 +190,244 @@ export default function TemplateBuilder() {
     theme
   } = useStore()
 
+  const rebuildTrackingDecorations = useCallback(() => {
+    if (!editorRef.current || !monacoRef.current) {
+      return
+    }
+
+    const editorInstance = editorRef.current
+    const monaco = monacoRef.current
+    const model = editorInstance.getModel()
+    if (!model) {
+      variableTrackingDecorationsRef.current = {}
+      groupTrackingDecorationsRef.current = {}
+      return
+    }
+
+    const state = useStore.getState()
+    const nextTrackingDecorations: editor.IModelDeltaDecoration[] = []
+    const annotationOrder: Array<{ kind: 'variable' | 'group'; id: string }> = []
+    const existingDecorationIds = [
+      ...Object.values(variableTrackingDecorationsRef.current),
+      ...Object.values(groupTrackingDecorationsRef.current)
+    ]
+
+    state.variables.forEach((variable) => {
+      const range = getVariableTrackingRange(monaco, model, variable)
+      if (!range) {
+        return
+      }
+
+      nextTrackingDecorations.push({
+        range,
+        options: {
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+        }
+      })
+      annotationOrder.push({ kind: 'variable', id: variable.id })
+    })
+
+    state.groups.forEach((group) => {
+      const range = getGroupTrackingRange(monaco, model, group)
+      if (!range) {
+        return
+      }
+
+      nextTrackingDecorations.push({
+        range,
+        options: {
+          stickiness: monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges
+        }
+      })
+      annotationOrder.push({ kind: 'group', id: group.id })
+    })
+
+    suppressTrackingSyncRef.current = true
+    try {
+      const nextDecorationIds = editorInstance.deltaDecorations(existingDecorationIds, nextTrackingDecorations)
+      const nextVariableTrackingDecorations: Record<string, string> = {}
+      const nextGroupTrackingDecorations: Record<string, string> = {}
+
+      annotationOrder.forEach((annotation, index) => {
+        const decorationId = nextDecorationIds[index]
+        if (!decorationId) {
+          return
+        }
+
+        if (annotation.kind === 'variable') {
+          nextVariableTrackingDecorations[annotation.id] = decorationId
+        } else {
+          nextGroupTrackingDecorations[annotation.id] = decorationId
+        }
+      })
+
+      variableTrackingDecorationsRef.current = nextVariableTrackingDecorations
+      groupTrackingDecorationsRef.current = nextGroupTrackingDecorations
+    } finally {
+      suppressTrackingSyncRef.current = false
+    }
+  }, [])
+
+  const doesTrackingMatchStore = useCallback(() => {
+    const editorInstance = editorRef.current
+    const model = editorInstance?.getModel()
+    const state = useStore.getState()
+    const { variables: storeVariables, groups: storeGroups } = state
+
+    if (!editorInstance || !model) {
+      return storeVariables.length === 0 && storeGroups.length === 0
+    }
+
+    const trackedVariableIds = Object.keys(variableTrackingDecorationsRef.current)
+    const trackedGroupIds = Object.keys(groupTrackingDecorationsRef.current)
+
+    if (trackedVariableIds.length !== storeVariables.length || trackedGroupIds.length !== storeGroups.length) {
+      return false
+    }
+
+    for (const variable of storeVariables) {
+      const decorationId = variableTrackingDecorationsRef.current[variable.id]
+      if (!decorationId) {
+        return false
+      }
+
+      const range = model.getDecorationRange(decorationId)
+      if (!range) {
+        return false
+      }
+
+      if (
+        range.startLineNumber !== variable.startLine ||
+        range.startColumn !== variable.startColumn ||
+        range.endLineNumber !== variable.endLine ||
+        range.endColumn !== variable.endColumn
+      ) {
+        return false
+      }
+    }
+
+    for (const group of storeGroups) {
+      const decorationId = groupTrackingDecorationsRef.current[group.id]
+      if (!decorationId) {
+        return false
+      }
+
+      const range = model.getDecorationRange(decorationId)
+      if (!range) {
+        return false
+      }
+
+      if (
+        range.startLineNumber !== group.startLine ||
+        range.startColumn !== 1 ||
+        range.endLineNumber !== group.endLine
+      ) {
+        return false
+      }
+    }
+
+    return true
+  }, [])
+
+  const syncTrackedRangesToStore = useCallback(() => {
+    const editorInstance = editorRef.current
+    const model = editorInstance?.getModel()
+    if (!editorInstance || !model) {
+      return
+    }
+
+    const state = useStore.getState()
+    const variableUpdates = state.variables.flatMap((variable) => {
+      const decorationId = variableTrackingDecorationsRef.current[variable.id]
+      if (!decorationId) {
+        return []
+      }
+
+      const range = model.getDecorationRange(decorationId)
+      if (!range) {
+        return []
+      }
+
+      const originalText = model.getValueInRange(range)
+      const positionChanged = (
+        variable.startLine !== range.startLineNumber ||
+        variable.startColumn !== range.startColumn ||
+        variable.endLine !== range.endLineNumber ||
+        variable.endColumn !== range.endColumn
+      )
+
+      if (!positionChanged && variable.originalText === originalText) {
+        return []
+      }
+
+      return [{
+        id: variable.id,
+        startLine: range.startLineNumber,
+        startColumn: range.startColumn,
+        endLine: range.endLineNumber,
+        endColumn: range.endColumn,
+        originalText
+      }]
+    })
+
+    const groupUpdates = state.groups.flatMap((group) => {
+      const decorationId = groupTrackingDecorationsRef.current[group.id]
+      if (!decorationId) {
+        return []
+      }
+
+      const range = model.getDecorationRange(decorationId)
+      if (!range) {
+        return []
+      }
+
+      if (group.startLine === range.startLineNumber && group.endLine === range.endLineNumber) {
+        return []
+      }
+
+      return [{
+        id: group.id,
+        startLine: range.startLineNumber,
+        endLine: range.endLineNumber
+      }]
+    })
+
+    if (variableUpdates.length > 0) {
+      state.syncVariableRanges(variableUpdates)
+    }
+
+    if (groupUpdates.length > 0) {
+      state.syncGroupRanges(groupUpdates)
+    }
+  }, [])
+
+  const scheduleTrackedRangeSync = useCallback(() => {
+    if (pendingSyncFrameRef.current !== null) {
+      return
+    }
+
+    pendingSyncFrameRef.current = window.requestAnimationFrame(() => {
+      pendingSyncFrameRef.current = null
+
+      if (suppressTrackingSyncRef.current) {
+        return
+      }
+
+      syncTrackedRangesToStore()
+    })
+  }, [syncTrackedRangesToStore])
+
   // Function to apply decorations
   const applyDecorations = useCallback(() => {
     if (!editorRef.current || !monacoRef.current) return
 
     const monaco = monacoRef.current
-    const editor = editorRef.current
-    const model = editor.getModel()
+    const editorInstance = editorRef.current
+    const model = editorInstance.getModel()
     if (!model) return
 
     if (variables.length === 0 && groups.length === 0) {
-      decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [])
+      decorationsRef.current = editorInstance.deltaDecorations(decorationsRef.current, [])
       return
     }
 
@@ -91,16 +435,16 @@ export default function TemplateBuilder() {
 
     // Add variable decorations
     variables.forEach((v, index) => {
+      const range = getVariableVisibleRange(monaco, model, v)
+      if (!range) {
+        return
+      }
+
       newDecorations.push({
-        range: new monaco.Range(
-          v.startLine,
-          v.startColumn,
-          v.endLine,
-          v.endColumn
-        ),
+        range,
         options: {
           className: `variable-highlight-${index % 12}`,
-          inlineClassName: `inline-variable-highlight`,
+          inlineClassName: 'inline-variable-highlight',
           inlineClassNameAffectsLetterSpacing: true,
           before: {
             content: v.name,
@@ -115,9 +459,12 @@ export default function TemplateBuilder() {
       })
     })
 
-    // Add group decorations - highlight entire line range
+    // Add group decorations - highlight current start and end lines
     groups.forEach((g) => {
       const lineCount = model.getLineCount()
+      if (g.startLine < 1 || g.endLine < 1 || g.startLine > g.endLine || g.startLine > lineCount || g.endLine > lineCount) {
+        return
+      }
 
       // Add decoration for the start line (show group start marker)
       newDecorations.push({
@@ -138,7 +485,7 @@ export default function TemplateBuilder() {
       })
 
       // Add decoration for the end line (show group end marker)
-      if (g.endLine <= lineCount && g.endLine !== g.startLine) {
+      if (g.endLine !== g.startLine) {
         newDecorations.push({
           range: new monaco.Range(g.endLine, 1, g.endLine, 1),
           options: {
@@ -151,7 +498,7 @@ export default function TemplateBuilder() {
             }
           }
         })
-      } else if (g.endLine === g.startLine) {
+      } else {
         // Single line group - show both markers on same line
         newDecorations.push({
           range: new monaco.Range(g.startLine, 1, g.startLine, 1),
@@ -168,13 +515,73 @@ export default function TemplateBuilder() {
       }
     })
 
-    decorationsRef.current = editor.deltaDecorations(
+    decorationsRef.current = editorInstance.deltaDecorations(
       decorationsRef.current,
       newDecorations
     )
   }, [variables, groups])
 
-  // Update decorations when variables, sampleText change, or editor becomes ready
+  useEffect(() => {
+    if (!isEditorReady) {
+      return
+    }
+
+    if (!doesTrackingMatchStore()) {
+      rebuildTrackingDecorations()
+      return
+    }
+
+    if (suppressTrackingSyncRef.current) {
+      suppressTrackingSyncRef.current = false
+    }
+  }, [isEditorReady, variables, groups, doesTrackingMatchStore, rebuildTrackingDecorations])
+
+  useEffect(() => {
+    if (!isEditorReady || !editorRef.current) {
+      return
+    }
+
+    contentChangeDisposableRef.current?.dispose()
+    contentChangeDisposableRef.current = editorRef.current.onDidChangeModelContent(() => {
+      if (suppressTrackingSyncRef.current) {
+        return
+      }
+
+      scheduleTrackedRangeSync()
+    })
+
+    return () => {
+      contentChangeDisposableRef.current?.dispose()
+      contentChangeDisposableRef.current = null
+    }
+  }, [isEditorReady, scheduleTrackedRangeSync])
+
+  useEffect(() => {
+    if (!isEditorReady || !editorRef.current) {
+      return
+    }
+
+    modelChangeDisposableRef.current?.dispose()
+    modelChangeDisposableRef.current = editorRef.current.onDidChangeModel(() => {
+      rebuildTrackingDecorations()
+      applyDecorations()
+    })
+
+    return () => {
+      modelChangeDisposableRef.current?.dispose()
+      modelChangeDisposableRef.current = null
+    }
+  }, [isEditorReady, rebuildTrackingDecorations, applyDecorations])
+
+  useEffect(() => {
+    return () => {
+      if (pendingSyncFrameRef.current !== null) {
+        window.cancelAnimationFrame(pendingSyncFrameRef.current)
+        pendingSyncFrameRef.current = null
+      }
+    }
+  }, [])
+
   useEffect(() => {
     if (!isEditorReady) return
 
@@ -186,7 +593,6 @@ export default function TemplateBuilder() {
       document.head.appendChild(styleEl)
     }
 
-    // Different styles for light vs dark theme
     const isDark = theme === 'dark'
     const bgOpacity = isDark ? '40' : '30'
     const groupBgOpacity = isDark ? '20' : '15'
@@ -235,13 +641,20 @@ export default function TemplateBuilder() {
         margin-left: 8px;
       }
     `
+  }, [isEditorReady, theme])
+
+  // Update decorations when variables, groups, or editor becomes ready
+  useEffect(() => {
+    if (!isEditorReady) {
+      return
+    }
 
     const timer = setTimeout(() => {
       applyDecorations()
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [isEditorReady, variables, groups, sampleText, applyDecorations, theme])
+  }, [isEditorReady, variables, groups, applyDecorations])
 
   // Update editor theme when app theme changes
   useEffect(() => {
@@ -295,6 +708,7 @@ export default function TemplateBuilder() {
 
         const selectedText = model.getValueInRange(selection)
 
+        setEditingVariable(null)
         setCurrentSelection({
           text: selectedText,
           startLine: selection.startLineNumber,
@@ -330,6 +744,7 @@ export default function TemplateBuilder() {
       }
     })
 
+    rebuildTrackingDecorations()
     setIsEditorReady(true)
   }
 
@@ -360,11 +775,17 @@ export default function TemplateBuilder() {
     monaco.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
   }
 
+  const handleVariableModalClose = useCallback(() => {
+    setShowModal(false)
+    setCurrentSelection(null)
+    setEditingVariable(null)
+  }, [])
+
   const handleVariableCreated = useCallback((
     name: string,
     pattern: string,
     indicators: string[],
-    syntaxMode: 'variable' | 'ignore' | 'headers' | 'end',
+    syntaxMode: VariableSyntaxMode,
     options?: { ignoreValue?: string; headersColumns?: number | null }
   ) => {
     if (!currentSelection) return
@@ -383,9 +804,35 @@ export default function TemplateBuilder() {
       originalText: currentSelection.text
     })
 
-    setShowModal(false)
+    handleVariableModalClose()
+  }, [currentSelection, addVariable, handleVariableModalClose])
+
+  const handleVariableEdited = useCallback((
+    name: string,
+    pattern: string,
+    indicators: string[],
+    syntaxMode: VariableSyntaxMode,
+    options?: { ignoreValue?: string; headersColumns?: number | null }
+  ) => {
+    if (!editingVariable) return
+
+    updateVariable(editingVariable.id, {
+      name,
+      pattern,
+      indicators,
+      syntaxMode,
+      ignoreValue: options?.ignoreValue,
+      headersColumns: options?.headersColumns ?? null
+    })
+
+    handleVariableModalClose()
+  }, [editingVariable, updateVariable, handleVariableModalClose])
+
+  const handleEditVariable = useCallback((variable: Variable) => {
     setCurrentSelection(null)
-  }, [currentSelection, addVariable])
+    setEditingVariable(variable)
+    setShowModal(true)
+  }, [])
 
   const handleGroupCreated = useCallback((name: string) => {
     if (!groupSelection) return
@@ -457,6 +904,7 @@ export default function TemplateBuilder() {
   }, [templateNameInput, templateDescInput, setTemplateName, saveTemplate])
 
   const handleLoadTemplate = useCallback(async (id: string) => {
+    suppressTrackingSyncRef.current = true
     await loadTemplate(id)
   }, [loadTemplate])
 
@@ -645,6 +1093,7 @@ export default function TemplateBuilder() {
           <VariableList
             variables={variables}
             groups={groups}
+            onEditVariable={handleEditVariable}
             onRemoveVariable={removeVariable}
             onRemoveGroup={removeGroup}
           />
@@ -652,15 +1101,14 @@ export default function TemplateBuilder() {
       </div>
 
       {/* Variable Modal */}
-      {showModal && currentSelection && (
+      {showModal && (currentSelection || editingVariable) && (
         <VariableModal
-          selectedText={currentSelection.text}
+          mode={editingVariable ? 'edit' : 'create'}
+          selectedText={editingVariable?.originalText || currentSelection?.text || ''}
           patterns={patterns}
-          onConfirm={handleVariableCreated}
-          onCancel={() => {
-            setShowModal(false)
-            setCurrentSelection(null)
-          }}
+          initialVariable={editingVariable}
+          onConfirm={editingVariable ? handleVariableEdited : handleVariableCreated}
+          onCancel={handleVariableModalClose}
         />
       )}
 

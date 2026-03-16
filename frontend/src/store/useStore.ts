@@ -36,6 +36,21 @@ export interface Group {
   colorIndex: number
 }
 
+export interface VariableRangeSyncUpdate {
+  id: string
+  startLine: number
+  startColumn: number
+  endLine: number
+  endColumn: number
+  originalText: string
+}
+
+export interface GroupRangeSyncUpdate {
+  id: string
+  startLine: number
+  endLine: number
+}
+
 export interface UploadedFile {
   id: string
   name: string
@@ -53,6 +68,10 @@ export interface FileParseResult {
   success: boolean
   error?: string
   errorType?: string
+}
+
+interface PreparedVariable extends Variable {
+  currentText: string
 }
 
 interface AppState {
@@ -84,8 +103,10 @@ interface AppState {
   addVariable: (variable: Omit<Variable, 'id' | 'colorIndex'>) => void
   removeVariable: (id: string) => void
   updateVariable: (id: string, updates: Partial<Variable>) => void
+  syncVariableRanges: (updates: VariableRangeSyncUpdate[]) => void
   addGroup: (group: Omit<Group, 'id' | 'colorIndex'>) => void
   removeGroup: (id: string) => void
+  syncGroupRanges: (updates: GroupRangeSyncUpdate[]) => void
   setTemplateName: (name: string) => void
   generateTemplate: () => string
   clearVariables: () => void
@@ -133,6 +154,79 @@ function toSavedTemplatePayload(state: Pick<AppState, 'sampleText' | 'variables'
     groups: state.groups as unknown as Array<Record<string, unknown>>,
     generatedTemplate: state.generatedTemplate
   }
+}
+
+function isValidPositiveInteger(value: number): boolean {
+  return Number.isInteger(value) && value > 0
+}
+
+function getLineText(lines: string[], lineNumber: number): string | null {
+  if (!isValidPositiveInteger(lineNumber) || lineNumber > lines.length) {
+    return null
+  }
+
+  return lines[lineNumber - 1]
+}
+
+function getSingleLineRangeText(
+  lines: string[],
+  lineNumber: number,
+  startColumn: number,
+  endColumn: number
+): string | null {
+  const lineText = getLineText(lines, lineNumber)
+  if (lineText === null) {
+    return null
+  }
+
+  if (!isValidPositiveInteger(startColumn) || !isValidPositiveInteger(endColumn)) {
+    return null
+  }
+
+  const maxColumn = lineText.length + 1
+  if (startColumn >= endColumn || startColumn > maxColumn || endColumn > maxColumn) {
+    return null
+  }
+
+  return lineText.substring(startColumn - 1, endColumn - 1)
+}
+
+function prepareVariableForGeneration(variable: Variable, lines: string[]): PreparedVariable | null {
+  if (!isValidPositiveInteger(variable.startLine) || !isValidPositiveInteger(variable.endLine)) {
+    return null
+  }
+
+  if (variable.startLine !== variable.endLine || variable.startLine > lines.length) {
+    return null
+  }
+
+  const currentText = getSingleLineRangeText(
+    lines,
+    variable.startLine,
+    variable.startColumn,
+    variable.endColumn
+  )
+
+  if (currentText === null) {
+    return null
+  }
+
+  return {
+    ...variable,
+    currentText
+  }
+}
+
+function prepareGroupForGeneration(group: Group, lineCount: number): Group | null {
+  if (!isValidPositiveInteger(group.startLine) || !isValidPositiveInteger(group.endLine)) {
+    return null
+  }
+
+  if (group.startLine > group.endLine || group.startLine > lineCount || group.endLine > lineCount) {
+    return null
+  }
+
+  return group
 }
 
 export const useStore = create<AppState>()(
@@ -184,6 +278,52 @@ export const useStore = create<AppState>()(
         }))
       },
 
+      syncVariableRanges: (updates) => {
+        if (updates.length === 0) {
+          return
+        }
+
+        const updatesById = new Map(updates.map((update) => [update.id, update]))
+
+        set((state) => {
+          let hasChanges = false
+
+          const variables = state.variables.map((variable) => {
+            const update = updatesById.get(variable.id)
+            if (!update) {
+              return variable
+            }
+
+            const nextOriginalText = update.originalText !== variable.originalText
+              ? update.originalText
+              : variable.originalText
+
+            const positionChanged = (
+              variable.startLine !== update.startLine ||
+              variable.startColumn !== update.startColumn ||
+              variable.endLine !== update.endLine ||
+              variable.endColumn !== update.endColumn
+            )
+
+            if (!positionChanged && nextOriginalText === variable.originalText) {
+              return variable
+            }
+
+            hasChanges = true
+            return {
+              ...variable,
+              startLine: update.startLine,
+              startColumn: update.startColumn,
+              endLine: update.endLine,
+              endColumn: update.endColumn,
+              originalText: nextOriginalText
+            }
+          })
+
+          return hasChanges ? { variables } : {}
+        })
+      },
+
       addGroup: (group) => {
         const state = get()
         const colorIndex = state.groups.length % VARIABLE_COLORS.length
@@ -201,27 +341,67 @@ export const useStore = create<AppState>()(
         }))
       },
 
+      syncGroupRanges: (updates) => {
+        if (updates.length === 0) {
+          return
+        }
+
+        const updatesById = new Map(updates.map((update) => [update.id, update]))
+
+        set((state) => {
+          let hasChanges = false
+
+          const groups = state.groups.map((group) => {
+            const update = updatesById.get(group.id)
+            if (!update) {
+              return group
+            }
+
+            if (group.startLine === update.startLine && group.endLine === update.endLine) {
+              return group
+            }
+
+            hasChanges = true
+            return {
+              ...group,
+              startLine: update.startLine,
+              endLine: update.endLine
+            }
+          })
+
+          return hasChanges ? { groups } : {}
+        })
+      },
+
       setTemplateName: (name) => set({ templateName: name }),
 
       generateTemplate: () => {
         const state = get()
         const { sampleText, variables, groups } = state
+        const lines = sampleText.split('\n')
 
-        if (variables.length === 0 && groups.length === 0) {
+        const preparedVariables = variables
+          .map((variable) => prepareVariableForGeneration(variable, lines))
+          .filter((variable): variable is PreparedVariable => variable !== null)
+
+        const preparedGroups = groups
+          .map((group) => prepareGroupForGeneration(group, lines.length))
+          .filter((group): group is Group => group !== null)
+
+        if (preparedVariables.length === 0 && preparedGroups.length === 0) {
           set({ generatedTemplate: sampleText })
           return sampleText
         }
 
-        const sortedVars = [...variables].sort((a, b) => {
+        const sortedVars = [...preparedVariables].sort((a, b) => {
           if (a.startLine !== b.startLine) return a.startLine - b.startLine
           return a.startColumn - b.startColumn
         })
 
-        const sortedGroups = [...groups].sort((a, b) => a.startLine - b.startLine)
-        const lines = sampleText.split('\n')
+        const sortedGroups = [...preparedGroups].sort((a, b) => a.startLine - b.startLine)
         const result: string[] = []
 
-        const replaceVariablesInLine = (line: string, lineVars: Variable[]) => {
+        const replaceVariablesInLine = (line: string, lineVars: PreparedVariable[]) => {
           if (lineVars.length === 0) return line
 
           let modifiedLine = line
@@ -241,9 +421,9 @@ export const useStore = create<AppState>()(
               const headerFilters = v.headersColumns && v.headersColumns > 0
                 ? `_headers_ | columns(${v.headersColumns})`
                 : '_headers_'
-              replacement = `${v.originalText} {{ ${headerFilters} }}`
+              replacement = `${v.currentText} {{ ${headerFilters} }}`
             } else if (v.syntaxMode === 'end') {
-              replacement = `${v.originalText} {{ _end_ }}`
+              replacement = `${v.currentText} {{ _end_ }}`
             } else {
               replacement = filters.length > 0
                 ? `{{ ${v.name} | ${filters.join(' | ')} }}`
@@ -256,7 +436,7 @@ export const useStore = create<AppState>()(
           return modifiedLine
         }
 
-        const varsByLine = new Map<number, Variable[]>()
+        const varsByLine = new Map<number, PreparedVariable[]>()
         sortedVars.forEach((v) => {
           const existing = varsByLine.get(v.startLine) || []
           existing.push(v)
@@ -276,7 +456,7 @@ export const useStore = create<AppState>()(
         })
 
         const lineIsInsideNamedGroup = (lineNum: number) => {
-          return sortedGroups.some(g => lineNum >= g.startLine && lineNum <= g.endLine)
+          return sortedGroups.some((group) => lineNum >= group.startLine && lineNum <= group.endLine)
         }
 
         const rootSegmentLines = new Set<number>()
@@ -286,7 +466,7 @@ export const useStore = create<AppState>()(
 
           for (let lineNum = 1; lineNum <= lines.length; lineNum++) {
             const insideNamedGroup = lineIsInsideNamedGroup(lineNum)
-            const hasRootVars = (varsByLine.get(lineNum) || []).some(v => !lineIsInsideNamedGroup(v.startLine))
+            const hasRootVars = !insideNamedGroup && (varsByLine.get(lineNum)?.length || 0) > 0
 
             if (!insideNamedGroup) {
               if (segmentStart === null) {
@@ -339,7 +519,7 @@ export const useStore = create<AppState>()(
           result.push(replaceVariablesInLine(line, varsOnLine))
 
           for (const group of groupsEndingHere) {
-            const idx = openGroups.findIndex(g => g.id === group.id)
+            const idx = openGroups.findIndex((openGroup) => openGroup.id === group.id)
             if (idx >= 0) {
               openGroups.splice(idx, 1)
               result.push('</group>')

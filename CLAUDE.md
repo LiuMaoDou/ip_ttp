@@ -75,6 +75,10 @@ cd frontend && npm run preview
 
 # Lint script exists, but there is no checked-in ESLint config in the repo
 cd frontend && npm run lint
+
+# There is currently no frontend test script in package.json.
+# vite.config.ts contains Vitest settings, but src/test/setup.ts is missing
+# and no frontend test files are checked in yet.
 ```
 
 ### Run full web stack
@@ -157,8 +161,9 @@ Template execution flow is:
 
 #### Template Builder flow
 
-- `components/TemplateBuilder/TemplateBuilder.tsx` owns Monaco editor integration and visual decorations.
+- `components/TemplateBuilder/TemplateBuilder.tsx` owns Monaco editor integration, visual decorations, and Monaco-backed runtime range tracking.
 - Right-click / selection flows open modal-driven creation for variables and groups.
+- The Sample Input editor is intentionally editable after annotations are added: Monaco tracking decorations move variable/group ranges during edits, then sync the updated coordinates back into Zustand via `syncVariableRanges()` / `syncGroupRanges()`.
 - Variable metadata stored in Zustand includes:
   - name
   - pattern
@@ -166,6 +171,7 @@ Template execution flow is:
   - syntax mode (`variable`, `ignore`, `headers`, `end`)
   - optional `ignoreValue` and `headersColumns`
 - `useStore.ts` centralizes final template generation logic. The UI captures selections, but `generateTemplate()` is the source of truth for converting variables/groups into final TTP template text.
+- `generateTemplate()` now defensively skips invalid or out-of-bounds annotations; multiline variables are treated as invalid rather than being patched into the current single-line replacement logic.
 - Saved templates are **backend-backed** now:
   - `savedTemplates` are fetched from `/api/templates`
   - `selectedSavedTemplateId` tracks which saved template is currently loaded
@@ -207,7 +213,9 @@ Template execution flow is:
 - **Web UI backend tests**:
   - `test/pytest/test_web_ui_template_service.py` covers SQLite CRUD and `/api/templates`
   - `test/pytest/test_web_ui_csv_output.py` covers `TTPService` CSV output behavior
+- **Template Builder coordinate sync matters**: variable/group coordinates are still the persisted contract for saved templates and `generateTemplate()`, but `TemplateBuilder.tsx` relies on Monaco tracking decorations to keep those coordinates aligned while users edit sample text. If you change annotation behavior, preserve that sync path instead of making generation depend directly on live Monaco selection state.
 - **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but there is no checked-in ESLint config in the repository, so lint currently fails for configuration reasons rather than app code errors.
+- **Frontend test wiring is incomplete**: `frontend/vite.config.ts` contains Vitest config, but there is no `test` script in `frontend/package.json`, no checked-in frontend test files, and `setupFiles` points at `frontend/src/test/setup.ts`, which is currently absent.
 - **When adding new TTP functions**:
   - place the module in the correct `ttp/<scope>/` directory
   - define `_name_map_` if the template-facing name differs from the Python function name

@@ -6,11 +6,12 @@ const GROUP_COLOR = '#f97316'
 interface VariableListProps {
   variables: Variable[]
   groups: Group[]
+  onEditVariable: (variable: Variable) => void
   onRemoveVariable: (id: string) => void
   onRemoveGroup: (id: string) => void
 }
 
-export default function VariableList({ variables, groups, onRemoveVariable, onRemoveGroup }: VariableListProps) {
+export default function VariableList({ variables, groups, onEditVariable, onRemoveVariable, onRemoveGroup }: VariableListProps) {
   if (variables.length === 0 && groups.length === 0) {
     return (
       <div className="p-4 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
@@ -84,7 +85,7 @@ export default function VariableList({ variables, groups, onRemoveVariable, onRe
                   backgroundColor: getVariableColor(variable.colorIndex) + '15'
                 }}
               >
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
@@ -121,16 +122,26 @@ export default function VariableList({ variables, groups, onRemoveVariable, onRe
                       Line {variable.startLine}, Col {variable.startColumn}
                     </div>
                   </div>
-                  <button
-                    onClick={() => onRemoveVariable(variable.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-2"
-                    style={{ color: 'var(--text-muted)' }}
-                    title="Remove variable"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
+                    <button
+                      onClick={() => onEditVariable(variable)}
+                      style={{ color: 'var(--text-muted)' }}
+                      title="Edit variable"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6.232-6.232a2.5 2.5 0 013.536 3.536L12.536 14.536A2 2 0 0111.12 15.12L8 16l.88-3.12A2 2 0 019.464 11.536z" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => onRemoveVariable(variable.id)}
+                      style={{ color: 'var(--text-muted)' }}
+                      title="Remove variable"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}

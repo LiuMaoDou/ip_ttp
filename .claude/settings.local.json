@@ -27,7 +27,8 @@
       "Bash(powershell.exe -NoProfile -Command '$ports = @\\(5173,8000,8001,8010\\); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; if \\(-not $connections\\) { Write-Output \"No listeners on 5173/8000/8001/8010\" } else { $connections | Sort-Object LocalPort, OwningProcess | ForEach-Object { $proc = Get-CimInstance Win32_Process -Filter \\(\"ProcessId = \" + $_.OwningProcess\\) -ErrorAction SilentlyContinue; $name = if \\($proc\\) { $proc.Name } else { \"<missing>\" }; Write-Output \\(\\(\"Port=\" + $_.LocalPort + \" Addr=\" + $_.LocalAddress + \" PID=\" + $_.OwningProcess + \" Name=\" + $name\\)\\) } }')",
       "Bash(git add:*)",
       "Bash(py:*)",
-      "Bash(which poetry:*)"
+      "Bash(which poetry:*)",
+      "Bash(bash \"/d/2026/ip_ttp/start-dev.sh\")"
     ]
   }
 }
