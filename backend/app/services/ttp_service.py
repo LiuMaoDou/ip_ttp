@@ -1,6 +1,14 @@
 """TTP Service - Wraps TTP library for parsing operations."""
+import csv
+import io
+import sys
+from pathlib import Path
 from copy import deepcopy
 from typing import Any, Optional
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from ttp import ttp
 from ttp.patterns import get_pattern
@@ -143,6 +151,53 @@ def _format_csv_from_normalized_result(parser: ttp, normalized_result: Any) -> s
     return outputter.run(deepcopy(normalized_result))
 
 
+def _line_start_offsets(data: str) -> list[int]:
+    """Return absolute offsets for the first character of each original input line."""
+    offsets = [1]
+    for index, char in enumerate(data):
+        if char == "\n":
+            offsets.append(index + 2)
+    return offsets
+
+
+def _line_end_offset(line_start: int, line_text: str) -> int:
+    """Return exclusive absolute end offset for a line in parser DATATEXT coordinates."""
+    return line_start + len(line_text)
+
+
+def _line_is_covered(line_start: int, line_end: int, spans: list[tuple[int, int]]) -> bool:
+    """Return True when any accepted span touches the line's text range."""
+    for span_start, span_end in spans:
+        if span_end <= line_start:
+            continue
+        if span_start >= line_end:
+            continue
+        return True
+    return False
+
+
+def _generate_checkup_csv(data: str, accepted_match_spans: list[tuple[int, int]]) -> str:
+    """Build a CSV with original lines and parsed/unparsed status."""
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL, lineterminator="\n")
+    writer.writerow(["line_text", "parse_status"])
+
+    lines = data.splitlines()
+    line_starts = _line_start_offsets(data)
+
+    for index, line_text in enumerate(lines):
+        line_start = line_starts[index]
+        line_end = _line_end_offset(line_start, line_text)
+        parse_status = (
+            "√ 解析"
+            if _line_is_covered(line_start, line_end, accepted_match_spans)
+            else "X 未解析"
+        )
+        writer.writerow([line_text, parse_status])
+
+    return output.getvalue().rstrip("\n")
+
+
 class TTPService:
     """Service class for TTP parsing operations."""
 
@@ -213,11 +268,16 @@ class TTPService:
             raw_result = parser.result()
             normalized_result = _normalize_result(raw_result)
             csv_result = _format_csv_from_normalized_result(parser, normalized_result)
+            checkup_csv_result = _generate_checkup_csv(
+                data=data,
+                accepted_match_spans=list(getattr(parser, "_last_accepted_match_spans", [])),
+            )
 
             return {
                 "success": True,
                 "result": normalized_result,
                 "csv_result": csv_result,
+                "checkup_csv_result": checkup_csv_result,
             }
         except Exception as e:
             return {

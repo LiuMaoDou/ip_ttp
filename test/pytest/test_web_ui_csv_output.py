@@ -35,6 +35,16 @@ interface {{ interface }}
         '"1.1.1.1","32","Lo0"\n'
         '"2.2.2.2","32","Lo1"'
     )
+    assert result["checkup_csv_result"] == (
+        '"line_text","parse_status"\n'
+        '"","X 未解析"\n'
+        '"interface Lo0","√ 解析"\n'
+        '" ip address 1.1.1.1/32","√ 解析"\n'
+        '"!","X 未解析"\n'
+        '"interface Lo1","√ 解析"\n'
+        '" ip address 2.2.2.2/32","√ 解析"\n'
+        '"!","X 未解析"'
+    )
 
 
 def test_csv_uses_single_wrapped_list_path():

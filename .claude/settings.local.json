@@ -28,7 +28,22 @@
       "Bash(git add:*)",
       "Bash(py:*)",
       "Bash(which poetry:*)",
-      "Bash(bash \"/d/2026/ip_ttp/start-dev.sh\")"
+      "Bash(bash \"/d/2026/ip_ttp/start-dev.sh\")",
+      "Bash(poetry run:*)",
+      "Bash(where.exe poetry:*)",
+      "Bash(where.exe pytest:*)",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -match 'uvicorn|vite|npm run dev|start-dev\\\\\\\\.bat|start-dev\\\\\\\\.sh' } | Select-Object ProcessId, Name, CommandLine | Format-Table -AutoSize\")",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8000,5173 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort, OwningProcess, State | Format-Table -AutoSize\")",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -in 5700,19208 } | Select-Object ProcessId, Name, CommandLine | Format-Table -Wrap -AutoSize\")",
+      "Bash(powershell -NoProfile -Command \"try { \\(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health\\).Content } catch { $_.Exception.Message }; try { \\(Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5173\\).StatusCode } catch { $_.Exception.Message }\")",
+      "Bash(powershell -NoProfile -Command '$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \"\"*uvicorn app.main:app*--port 8000*\"\" }; if \\($procs\\) { $procs | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }')",
+      "Bash(cmd.exe /c start \"TTP Backend\" cmd /k \"cd /d D:\\\\2026\\\\ip_ttp\\\\backend && python -m uvicorn app.main:app --reload --reload-dir D:\\\\2026\\\\ip_ttp\\\\backend --reload-dir D:\\\\2026\\\\ip_ttp\\\\ttp --host 127.0.0.1 --port 8000\")",
+      "Bash(powershell -NoProfile -Command 'for \\($i=0; $i -lt 30; $i++\\) { try { $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health; if \\($r.Content -match \"\"healthy\"\"\\) { Write-Output \"\"healthy\"\"; exit 0 } } catch {} Start-Sleep -Milliseconds 500 } Write-Error \"\"backend did not start\"\"; exit 1')",
+      "Bash(powershell -NoProfile -Command \"for \\($i=0; $i -lt 40; $i++\\) { try { $r = Invoke-WebRequest -UseBasicParsing http://127.0.0.1:8000/health; if \\($r.Content -match 'healthy'\\) { Write-Output 'healthy'; exit 0 } } catch {} Start-Sleep -Milliseconds 500 }; Write-Error 'backend did not start'; exit 1\")",
+      "Bash(powershell -NoProfile -Command '$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \"*uvicorn*app.main:app*8000*\" }; $procs | Select-Object ProcessId, Name, CommandLine | Format-Table -Wrap -AutoSize')",
+      "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort, OwningProcess, State | Format-Table -AutoSize\")",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { \\\\$_.CommandLine -like '*uvicorn*8000*' -or \\\\$_.CommandLine -like '*app.main:app*8000*' } | Select-Object ProcessId, Name, CommandLine | Format-Table -Wrap -AutoSize\")",
+      "Bash(tasklist:*)"
     ]
   }
 }

@@ -65,6 +65,7 @@ export interface FileParseResult {
   templateName?: string
   result: unknown
   csvResult?: string
+  checkupCsvResult?: string
   success: boolean
   error?: string
   errorType?: string

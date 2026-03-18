@@ -237,6 +237,7 @@ class ttp:
         # add reference to TTP object in _ttp_ dunder
         self._ttp_["ttp_object"] = self
         self._ttp_["dynamic_path_key_to_int"] = dynamic_path_key_to_int
+        self._last_accepted_match_spans = []
         # check if template given, if so - load it
         if template != "":
             self.add_template(template=template)
@@ -511,6 +512,7 @@ class ttp:
                         parserObj.set_data(
                             datum, main_results={}, input_functions=input_obj.functions
                         )
+                        self._last_accepted_match_spans = []
                         parserObj.parse(groups_indexes=input_obj.groups_indexes)
                         result = parserObj.main_results
                         template.form_results(result)
@@ -523,6 +525,7 @@ class ttp:
                             main_results=results_data,
                             input_functions=input_obj.functions,
                         )
+                        self._last_accepted_match_spans = []
                         parserObj.parse(groups_indexes=input_obj.groups_indexes)
                         results_data = parserObj.main_results
                 template.form_results(results_data)
@@ -2507,11 +2510,12 @@ class _parser_class:
                 if result is False and not regex["ACTION"].startswith("start"):
                     continue
                 # form result dictionary of dictionaries:
-                span_start = start + match.span()[0]
+                span = (start + match.span()[0], start + match.span()[1])
+                span_start = span[0]
                 if span_start not in results:
-                    results[span_start] = [(regex, result)]
+                    results[span_start] = [(regex, result, span)]
                 else:
-                    results[span_start].append((regex, result))
+                    results[span_start].append((regex, result, span))
 
         def run_re(group, results, start=0, end=-1):
             """Recursive function to run REs"""
@@ -2551,7 +2555,7 @@ class _parser_class:
                     while key in results:
                         key += 1
                     else:
-                        results[key] = [(start_re, {})]
+                        results[key] = [(start_re, {}, None)]
 
                 # run recursion to fill in results for children
                 for child_group in group.children:
@@ -2705,9 +2709,11 @@ class _results_class:
             # iterate over each match result for the group
             for result in group_results:
                 # if result been matched by one regex only
+                accepted_span = None
                 if len(result) == 1:
                     re_ = result[0][0]
                     result_data = result[0][1]
+                    accepted_span = result[0][2]
                 # if same results captured by multiple regexes, need to do further decision making
                 else:
                     re_ = None
@@ -2728,6 +2734,7 @@ class _results_class:
                         for index in startempty_re:
                             re_ = result[index][0]
                             result_data = result[index][1]
+                            accepted_span = result[index][2]
                             # skip results that did not pass validation check
                             if result_data == False:
                                 continue
@@ -2739,6 +2746,7 @@ class _results_class:
                             for index in startempty_re:
                                 re_ = result[index][0]
                                 result_data = result[index][1]
+                                accepted_span = result[index][2]
                                 # skip results that did not pass validation check
                                 if result_data == False:
                                     continue
@@ -2758,6 +2766,7 @@ class _results_class:
                         for index in start_re:
                             re_ = result[index][0]
                             result_data = result[index][1]
+                            accepted_span = result[index][2]
                             # skip results that did not pass validation check
                             if result_data == False:
                                 continue
@@ -2769,6 +2778,7 @@ class _results_class:
                             for index in start_re:
                                 re_ = result[index][0]
                                 result_data = result[index][1]
+                                accepted_span = result[index][2]
                                 # skip results that did not pass validation check
                                 if result_data == False:
                                     continue
@@ -2787,6 +2797,7 @@ class _results_class:
                         for index in normal_re:
                             re_ = result[index][0]
                             result_data = result[index][1]
+                            accepted_span = result[index][2]
                             # prefer result with same path as current record
                             if re_["GROUP"].group_id == self.record["GRP_ID"]:
                                 break
@@ -2795,6 +2806,7 @@ class _results_class:
                             for index in normal_re:
                                 re_ = result[index][0]
                                 result_data = result[index][1]
+                                accepted_span = result[index][2]
                                 if re_["GROUP"].group_id in self.started_groups:
                                     break
                     # line REs have least preference
@@ -2802,6 +2814,7 @@ class _results_class:
                         for index in line_re:
                             re_ = result[index][0]
                             result_data = result[index][1]
+                            accepted_span = result[index][2]
                             # prefer result with same path as current record
                             if re_["GROUP"].group_id == self.record["GRP_ID"]:
                                 break
@@ -2821,6 +2834,11 @@ class _results_class:
                         self.ended_groups.remove(re_["GROUP"].group_id)
                     else:
                         continue
+
+                if accepted_span is not None:
+                    self._ttp_["ttp_object"]._last_accepted_match_spans.append(
+                        accepted_span
+                    )
 
                 # Save results:
                 saveFuncs[re_["ACTION"]](

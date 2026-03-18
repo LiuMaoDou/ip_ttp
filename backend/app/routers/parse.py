@@ -20,6 +20,7 @@ class ParseResponse(BaseModel):
     success: bool
     result: Optional[list | dict] = None
     csv_result: Optional[str] = None
+    checkup_csv_result: Optional[str] = None
     error: Optional[str] = None
     error_type: Optional[str] = None
 

@@ -19,6 +19,7 @@ export interface ParseResult {
   success: boolean
   result?: unknown
   csvResult?: string
+  checkupCsvResult?: string
   error?: string
   errorType?: string
 }
@@ -32,6 +33,7 @@ interface ParseResponse {
   success: boolean
   result?: unknown
   csv_result?: string
+  checkup_csv_result?: string
   error?: string
   error_type?: string
 }
@@ -113,6 +115,7 @@ export async function parseText(data: string, template: string, name?: string): 
     success: response.data.success,
     result: response.data.result,
     csvResult: response.data.csv_result,
+    checkupCsvResult: response.data.checkup_csv_result,
     error: response.data.error,
     errorType: response.data.error_type
   }
@@ -133,6 +136,7 @@ export async function parseFile(file: File, template: string): Promise<ParseResu
     success: response.data.success,
     result: response.data.result,
     csvResult: response.data.csv_result,
+    checkupCsvResult: response.data.checkup_csv_result,
     error: response.data.error,
     errorType: response.data.error_type
   }

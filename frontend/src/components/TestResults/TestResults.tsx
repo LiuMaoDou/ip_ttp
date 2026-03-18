@@ -38,6 +38,10 @@ function getResultCsvDownloadName(result: FileParseResult): string {
   return `${getResultDownloadBaseName(result)}.csv`
 }
 
+function getResultCheckupDownloadName(result: FileParseResult): string {
+  return `${getResultDownloadBaseName(result)}.checkup.csv`
+}
+
 function hasDownloadableResult(result: Pick<FileParseResult, 'success' | 'result'>): boolean {
   return result.success && result.result !== undefined && result.result !== null
 }
@@ -46,8 +50,16 @@ function hasDownloadableCsvResult(result: Pick<FileParseResult, 'success' | 'csv
   return result.success && typeof result.csvResult === 'string'
 }
 
+function hasDownloadableCheckupResult(result: Pick<FileParseResult, 'success' | 'checkupCsvResult'>): boolean {
+  return result.success && typeof result.checkupCsvResult === 'string'
+}
+
 function getCsvContent(result: Pick<FileParseResult, 'csvResult'>): string {
   return result.csvResult || ''
+}
+
+function getCheckupCsvContent(result: Pick<FileParseResult, 'checkupCsvResult'>): string {
+  return result.checkupCsvResult || ''
 }
 
 export default function TestResults() {
@@ -281,6 +293,7 @@ export default function TestResults() {
               templateName: templateSource.name,
               result: result.result,
               csvResult: result.csvResult,
+              checkupCsvResult: result.checkupCsvResult,
               success: result.success,
               error: result.error,
               errorType: result.errorType
@@ -336,6 +349,13 @@ export default function TestResults() {
     const csvStr = getCsvContent(result)
     const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8' })
     saveAs(blob, getResultCsvDownloadName(result))
+  }
+
+  const handleDownloadSingleCheckup = (result: FileParseResult) => {
+    if (!hasDownloadableCheckupResult(result)) return
+    const checkupCsvStr = getCheckupCsvContent(result)
+    const blob = new Blob([checkupCsvStr], { type: 'text/csv;charset=utf-8' })
+    saveAs(blob, getResultCheckupDownloadName(result))
   }
 
   const handleDownloadAllJson = async () => {
@@ -728,6 +748,18 @@ export default function TestResults() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
                     CSV
+                  </button>
+                )}
+                {hasDownloadableCheckupResult(currentResult) && (
+                  <button
+                    onClick={() => handleDownloadSingleCheckup(currentResult)}
+                    className="btn text-sm flex items-center gap-1"
+                    title="Download checkup CSV"
+                  >
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                    Checkup
                   </button>
                 )}
               </div>
