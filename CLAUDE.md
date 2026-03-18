@@ -34,6 +34,7 @@ cd test/pytest && poetry run pytest test_misc.py::test_quick_parse -vv
 # Run Web UI backend regression tests
 cd test/pytest && poetry run pytest test_web_ui_template_service.py -vv
 cd test/pytest && poetry run pytest test_web_ui_csv_output.py -vv
+cd test/pytest && poetry run pytest test_web_ui_parse_api.py -vv
 
 # Run pre-commit hooks
 poetry run pre-commit run --all-files
@@ -141,9 +142,11 @@ Template execution flow is:
   - `PUT /api/templates/{template_id}`
   - `DELETE /api/templates/{template_id}`
 - `app/services/ttp_service.py` is the backend integration point to the core parser:
+  - prepends the repository root to `sys.path` before importing `ttp`, so backend runs from `backend/` still use the local `ttp/` package rather than any globally installed `ttp`
   - runs `ttp(...).parse()`
   - normalizes the nested Python result shape returned by TTP into the simpler JSON shape used by the UI
   - returns `csv_result` using TTP output machinery so frontend CSV downloads come from backend-generated formatter output
+  - returns `checkup_csv_result`, a backend-generated per-line coverage CSV built from the original input text plus accepted parser match spans
 - `app/services/template_service.py` is the SQLite persistence layer for saved templates:
   - uses Python stdlib `sqlite3` only
   - initializes schema on startup
@@ -187,11 +190,14 @@ Template execution flow is:
 - Each result includes:
   - normalized JSON parse output (`result`)
   - backend-produced formatter output (`csvResult`)
+  - backend-produced per-line coverage output (`checkupCsvResult`)
 - Download actions support:
   - per-result JSON
   - per-result CSV
+  - per-result Checkup CSV
   - ZIP of all JSON results
   - ZIP of all CSV results
+- Checkup downloads are intentionally only available for the currently selected successful result; there is no bulk Checkup ZIP action.
 
 ### 5) API boundary (`frontend/src/services/api.ts`)
 
@@ -204,7 +210,7 @@ Template execution flow is:
 
 - **Test working directory matters**: core tests assume execution from `test/pytest/`; fixture paths are relative to that directory.
 - **Frontend commands must run from `frontend/`**: running `npm run dev` or `npm run build` from repo root fails because `package.json` is under `frontend/`.
-- **Vite proxy / backend port alignment matters**: frontend development expects `/api` to proxy to `http://localhost:8000`.
+- **Vite proxy / backend port alignment matters**: frontend development expects `/api` to proxy to whatever backend port is currently configured in `frontend/vite.config.ts`. The default project target is `http://localhost:8000`, but this may be temporarily changed during debugging.
 - **Saved template persistence split**:
   - backend SQLite is the source of truth for `savedTemplates`
   - browser localStorage still holds the current draft/editor state and other UI convenience state
@@ -212,7 +218,8 @@ Template execution flow is:
 - **Template DB path**: set `TTP_WEB_DB_PATH` to point the Web UI at a different SQLite file; useful for tests and isolated local runs.
 - **Web UI backend tests**:
   - `test/pytest/test_web_ui_template_service.py` covers SQLite CRUD and `/api/templates`
-  - `test/pytest/test_web_ui_csv_output.py` covers `TTPService` CSV output behavior
+  - `test/pytest/test_web_ui_csv_output.py` covers `TTPService` CSV and Checkup CSV behavior
+  - `test/pytest/test_web_ui_parse_api.py` covers `/api/parse` response mapping, including `checkup_csv_result`
 - **Template Builder coordinate sync matters**: variable/group coordinates are still the persisted contract for saved templates and `generateTemplate()`, but `TemplateBuilder.tsx` relies on Monaco tracking decorations to keep those coordinates aligned while users edit sample text. If you change annotation behavior, preserve that sync path instead of making generation depend directly on live Monaco selection state.
 - **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but there is no checked-in ESLint config in the repository, so lint currently fails for configuration reasons rather than app code errors.
 - **Frontend test wiring is incomplete**: `frontend/vite.config.ts` contains Vitest config, but there is no `test` script in `frontend/package.json`, no checked-in frontend test files, and `setupFiles` points at `frontend/src/test/setup.ts`, which is currently absent.

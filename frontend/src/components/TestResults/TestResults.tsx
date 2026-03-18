@@ -351,13 +351,6 @@ export default function TestResults() {
     saveAs(blob, getResultCsvDownloadName(result))
   }
 
-  const handleDownloadSingleCheckup = (result: FileParseResult) => {
-    if (!hasDownloadableCheckupResult(result)) return
-    const checkupCsvStr = getCheckupCsvContent(result)
-    const blob = new Blob([checkupCsvStr], { type: 'text/csv;charset=utf-8' })
-    saveAs(blob, getResultCheckupDownloadName(result))
-  }
-
   const handleDownloadAllJson = async () => {
     const downloadableResults = fileResults.filter(hasDownloadableResult)
     if (downloadableResults.length === 0) return
@@ -383,6 +376,19 @@ export default function TestResults() {
 
     const content = await zip.generateAsync({ type: 'blob' })
     saveAs(content, 'parse_results_csv.zip')
+  }
+
+  const handleDownloadAllCheckup = async () => {
+    const downloadableResults = fileResults.filter(hasDownloadableCheckupResult)
+    if (downloadableResults.length === 0) return
+
+    const zip = new JSZip()
+    downloadableResults.forEach((result) => {
+      zip.file(getResultCheckupDownloadName(result), getCheckupCsvContent(result))
+    })
+
+    const content = await zip.generateAsync({ type: 'blob' })
+    saveAs(content, 'parse_results_checkup.zip')
   }
 
   const currentResult = fileResults[selectedResultIndex] || fileResults[0]
@@ -423,7 +429,7 @@ export default function TestResults() {
               'Run Test'
             )}
           </button>
-          {fileResults.length > 0 && (fileResults.some(hasDownloadableResult) || fileResults.some(hasDownloadableCsvResult)) && (
+          {fileResults.length > 0 && (fileResults.some(hasDownloadableResult) || fileResults.some(hasDownloadableCsvResult) || fileResults.some(hasDownloadableCheckupResult)) && (
             <>
               {fileResults.some(hasDownloadableResult) && (
                 <button
@@ -447,6 +453,18 @@ export default function TestResults() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                   </svg>
                   Download CSV
+                </button>
+              )}
+              {fileResults.some(hasDownloadableCheckupResult) && (
+                <button
+                  onClick={handleDownloadAllCheckup}
+                  className="btn flex items-center gap-1"
+                  title="Download all checkup results as CSV ZIP"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Download Checkup
                 </button>
               )}
             </>
@@ -748,18 +766,6 @@ export default function TestResults() {
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
                     </svg>
                     CSV
-                  </button>
-                )}
-                {hasDownloadableCheckupResult(currentResult) && (
-                  <button
-                    onClick={() => handleDownloadSingleCheckup(currentResult)}
-                    className="btn text-sm flex items-center gap-1"
-                    title="Download checkup CSV"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    Checkup
                   </button>
                 )}
               </div>
