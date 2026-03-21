@@ -2,6 +2,7 @@ import { useRef, useState, useCallback, useEffect } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor, IRange, IDisposable } from 'monaco-editor'
 import { useStore, getVariableColor, type Variable, type VariableSyntaxMode } from '../../store/useStore'
+import { getParameterPlaceholderDecorations } from '../../utils'
 import VariableModal from './VariableModal'
 import GroupModal from './GroupModal'
 import VariableList from './VariableList'
@@ -151,6 +152,7 @@ export default function TemplateBuilder() {
   const modelChangeDisposableRef = useRef<IDisposable | null>(null)
   const generatedEditorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const generatedMonacoRef = useRef<typeof import('monaco-editor') | null>(null)
+  const generatedParameterDecorationsRef = useRef<string[]>([])
 
   const [showModal, setShowModal] = useState(false)
   const [showGroupModal, setShowGroupModal] = useState(false)
@@ -158,7 +160,6 @@ export default function TemplateBuilder() {
   const [editingVariable, setEditingVariable] = useState<Variable | null>(null)
   const [groupSelection, setGroupSelection] = useState<GroupSelection | null>(null)
   const [showTemplateNameModal, setShowTemplateNameModal] = useState(false)
-  const [showSaveModal, setShowSaveModal] = useState(false)
   const [templateNameInput, setTemplateNameInput] = useState('')
   const [templateDescInput, setTemplateDescInput] = useState('')
   const [isEditorReady, setIsEditorReady] = useState(false)
@@ -179,6 +180,7 @@ export default function TemplateBuilder() {
     removeGroup,
     setTemplateName,
     clearVariables,
+    newTemplate,
     patterns,
     savedTemplates,
     saveTemplate,
@@ -189,6 +191,8 @@ export default function TemplateBuilder() {
     isLoadingTemplates,
     theme
   } = useStore()
+
+  const selectedSavedTemplate = savedTemplates.find((savedTemplate) => savedTemplate.id === selectedSavedTemplateId)
 
   const rebuildTrackingDecorations = useCallback(() => {
     if (!editorRef.current || !monacoRef.current) {
@@ -624,7 +628,7 @@ export default function TemplateBuilder() {
         border-left: 3px solid ${GROUP_COLOR} !important;
       }
       .group-marker {
-        font-family: Consolas, Monaco, monospace;
+        font-family: var(--font-mono);
         font-size: 12px;
         padding: 0 6px;
         border-radius: 3px;
@@ -655,6 +659,22 @@ export default function TemplateBuilder() {
 
     return () => clearTimeout(timer)
   }, [isEditorReady, variables, groups, applyDecorations])
+
+  useEffect(() => {
+    if (!generatedEditorRef.current || !generatedMonacoRef.current) {
+      return
+    }
+
+    const model = generatedEditorRef.current.getModel()
+    if (!model) {
+      return
+    }
+
+    generatedParameterDecorationsRef.current = generatedEditorRef.current.deltaDecorations(
+      generatedParameterDecorationsRef.current,
+      getParameterPlaceholderDecorations(generatedMonacoRef.current, model)
+    )
+  }, [generatedTemplate])
 
   // Update editor theme when app theme changes
   useEffect(() => {
@@ -773,6 +793,14 @@ export default function TemplateBuilder() {
     })
 
     monaco.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
+
+    const model = editorInstance.getModel()
+    if (model) {
+      generatedParameterDecorationsRef.current = editorInstance.deltaDecorations(
+        generatedParameterDecorationsRef.current,
+        getParameterPlaceholderDecorations(monaco, model)
+      )
+    }
   }
 
   const handleVariableModalClose = useCallback(() => {
@@ -847,47 +875,16 @@ export default function TemplateBuilder() {
     setGroupSelection(null)
   }, [groupSelection, addGroup])
 
-  const handleGenerateTemplate = useCallback(() => {
+  const handleSaveTemplate = useCallback(() => {
     if (variables.length === 0 && groups.length === 0) {
       alert('Please add at least one variable or group')
       return
     }
+
+    setTemplateNameInput(templateName || selectedSavedTemplate?.name || '')
+    setTemplateDescInput(selectedSavedTemplate?.description || '')
     setShowTemplateNameModal(true)
-    setTemplateNameInput(templateName || '')
-  }, [variables, groups, templateName])
-
-  const handleSaveTemplate = useCallback(async () => {
-    if (variables.length === 0 && groups.length === 0) {
-      alert('Please add at least one variable or group')
-      return
-    }
-
-    if (templateName) {
-      setIsSavingTemplate(true)
-      try {
-        await saveTemplate(templateName, '')
-      } finally {
-        setIsSavingTemplate(false)
-      }
-    } else {
-      setTemplateNameInput('')
-      setTemplateDescInput('')
-      setShowSaveModal(true)
-    }
-  }, [variables, groups, templateName, saveTemplate])
-
-  const handleSaveSubmit = useCallback(async () => {
-    const name = templateNameInput || 'untitled'
-    setIsSavingTemplate(true)
-    try {
-      await saveTemplate(name, templateDescInput)
-      setShowSaveModal(false)
-      setTemplateNameInput('')
-      setTemplateDescInput('')
-    } finally {
-      setIsSavingTemplate(false)
-    }
-  }, [templateNameInput, templateDescInput, saveTemplate])
+  }, [variables, groups, templateName, selectedSavedTemplate])
 
   const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
@@ -934,18 +931,18 @@ export default function TemplateBuilder() {
             Clear
           </button>
           <button
-            onClick={() => { void handleSaveTemplate() }}
+            onClick={newTemplate}
             className="btn"
-            disabled={isSavingTemplate || (variables.length === 0 && groups.length === 0)}
+            disabled={!sampleText && !generatedTemplate && variables.length === 0 && groups.length === 0 && !templateName && !selectedSavedTemplateId}
           >
-            {isSavingTemplate ? 'Saving...' : 'Save'}
+            New
           </button>
           <button
-            onClick={handleGenerateTemplate}
+            onClick={handleSaveTemplate}
             className="btn"
             disabled={variables.length === 0 && groups.length === 0}
           >
-            Generate
+            Save
           </button>
         </div>
       </div>
@@ -955,7 +952,7 @@ export default function TemplateBuilder() {
         {/* Left: Saved Templates Sidebar */}
         <div className="w-56 border-r overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <div className="p-2">
-            <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Saved Templates ({savedTemplates.length})</h3>
+            <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Template Management ({savedTemplates.length})</h3>
             {isLoadingTemplates ? (
               <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>Loading templates...</p>
             ) : savedTemplates.length === 0 ? (
@@ -1033,7 +1030,7 @@ export default function TemplateBuilder() {
                   lineNumbers: 'on',
                   wordWrap: 'on',
                   fontSize: 14,
-                  fontFamily: 'Consolas, Monaco, monospace',
+                  fontFamily: 'var(--font-mono)',
                   scrollBeyondLastLine: false,
                   contextmenu: true,
                   automaticLayout: true
@@ -1070,7 +1067,7 @@ export default function TemplateBuilder() {
                     lineNumbers: 'on',
                     wordWrap: 'on',
                     fontSize: 14,
-                    fontFamily: 'Consolas, Monaco, monospace',
+                    fontFamily: 'var(--font-mono)',
                     scrollBeyondLastLine: false,
                     readOnly: true,
                     automaticLayout: true
@@ -1080,7 +1077,7 @@ export default function TemplateBuilder() {
                 <div className="h-full flex items-center justify-center" style={{ color: 'var(--text-muted)' }}>
                   <div className="text-center">
                     <p className="text-sm">Add variables/groups</p>
-                    <p className="text-sm">and click Generate</p>
+                    <p className="text-sm">and click Save</p>
                   </div>
                 </div>
               )}
@@ -1089,7 +1086,7 @@ export default function TemplateBuilder() {
         </div>
 
         {/* Right: Variable list sidebar */}
-        <div className="w-64 border-l overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
+        <div className="w-56 border-l overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <VariableList
             variables={variables}
             groups={groups}
@@ -1130,7 +1127,7 @@ export default function TemplateBuilder() {
       {showTemplateNameModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Generate Template</h3>
+            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
             <input
               type="text"
               value={templateNameInput}
@@ -1156,46 +1153,6 @@ export default function TemplateBuilder() {
               </button>
               <button
                 onClick={() => { void handleTemplateNameSubmit() }}
-                className="btn"
-                disabled={isSavingTemplate}
-              >
-                {isSavingTemplate ? 'Saving...' : 'Generate'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Save Template Modal */}
-      {showSaveModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
-          <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
-            <input
-              type="text"
-              value={templateNameInput}
-              onChange={(e) => setTemplateNameInput(e.target.value)}
-              placeholder="Template name (e.g., interface-parser)"
-              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              autoFocus
-            />
-            <textarea
-              value={templateDescInput}
-              onChange={(e) => setTemplateDescInput(e.target.value)}
-              placeholder="Description (optional)"
-              className="w-full px-3 py-2 border rounded-md mb-4 h-20 resize-none focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowSaveModal(false)}
-                className="btn"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => { void handleSaveSubmit() }}
                 className="btn"
                 disabled={isSavingTemplate}
               >

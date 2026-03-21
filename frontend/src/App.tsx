@@ -1,29 +1,36 @@
 import { useEffect, useState } from 'react'
-import { TemplateBuilder, TestResults } from './components'
+import { ConfigGeneration, TemplateBuilder, TestResults } from './components'
 import { useStore } from './store/useStore'
 import { getPatterns } from './services/api'
 
-type Tab = 'template' | 'test'
+type Tab = 'template' | 'test' | 'config'
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('template')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking')
 
-  const { setPatterns, fetchSavedTemplates, theme, toggleTheme } = useStore()
+  const {
+    setPatterns,
+    fetchSavedTemplates,
+    fetchGenerationTemplates,
+    theme,
+    toggleTheme
+  } = useStore()
 
-  // Apply theme to document
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
   }, [theme])
 
-  // Load patterns and saved templates on mount
   useEffect(() => {
     const loadAppData = async () => {
       try {
-        const patterns = await getPatterns()
+        const [patterns] = await Promise.all([
+          getPatterns(),
+          fetchSavedTemplates(),
+          fetchGenerationTemplates()
+        ])
         setPatterns(patterns)
-        await fetchSavedTemplates()
         setBackendStatus('connected')
       } catch (error) {
         console.error('Failed to load app data:', error)
@@ -31,7 +38,7 @@ export default function App() {
       }
     }
     void loadAppData()
-  }, [fetchSavedTemplates, setPatterns])
+  }, [fetchGenerationTemplates, fetchSavedTemplates, setPatterns])
 
   const tabs: { id: Tab; label: string; icon: JSX.Element }[] = [
     {
@@ -51,12 +58,20 @@ export default function App() {
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
         </svg>
       )
+    },
+    {
+      id: 'config',
+      label: 'Config Generation',
+      icon: (
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
+        </svg>
+      )
     }
   ]
 
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-      {/* Header */}
       <header className="px-4 py-3 border-b" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -65,7 +80,6 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-4">
-            {/* Theme Toggle Button */}
             <button
               onClick={toggleTheme}
               className="p-2 rounded-lg transition-colors hover:opacity-80"
@@ -83,7 +97,6 @@ export default function App() {
               )}
             </button>
 
-            {/* Backend status indicator */}
             <div className="flex items-center gap-2">
               <div className={`w-2 h-2 rounded-full ${
                 backendStatus === 'checking' ? 'bg-yellow-500 animate-pulse' :
@@ -100,7 +113,6 @@ export default function App() {
         </div>
       </header>
 
-      {/* Desktop tabs */}
       <nav className="border-b hidden md:flex" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
         <div className="flex">
           {tabs.map((tab) => (
@@ -121,7 +133,6 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Mobile menu button */}
       <div className="md:hidden border-b p-2" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
         <button
           onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
@@ -131,11 +142,10 @@ export default function App() {
           <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
-          <span>{tabs.find(t => t.id === activeTab)?.label}</span>
+          <span>{tabs.find((t) => t.id === activeTab)?.label}</span>
         </button>
       </div>
 
-      {/* Mobile menu */}
       {isMobileMenuOpen && (
         <div className="md:hidden border-b" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
           {tabs.map((tab) => (
@@ -158,13 +168,12 @@ export default function App() {
         </div>
       )}
 
-      {/* Main content */}
       <main className="flex-1 overflow-hidden">
         {activeTab === 'template' && <TemplateBuilder />}
         {activeTab === 'test' && <TestResults />}
+        {activeTab === 'config' && <ConfigGeneration />}
       </main>
 
-      {/* Footer */}
       <footer className="px-4 py-2 text-center text-xs border-t" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
         TTP Web - Interactive Template Text Parser |{' '}
         <a

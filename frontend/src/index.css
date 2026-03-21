@@ -4,6 +4,7 @@
 
 :root {
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  --font-mono: Consolas, Monaco, monospace;
 }
 
 /* Light theme variables */
@@ -22,6 +23,9 @@
   --accent-hover: #2563eb;
   --success: #22c55e;
   --error: #ef4444;
+  --template-param-bg: rgba(124, 58, 237, 0.08);
+  --template-param-text: #5b21b6;
+  --template-param-border: #c4b5fd;
 }
 
 /* Make sure all components use the correct variables */
@@ -56,6 +60,9 @@
   --accent-hover: #60a5fa;
   --success: #22c55e;
   --error: #ef4444;
+  --template-param-bg: rgba(59, 130, 246, 0.22);
+  --template-param-text: #93c5fd;
+  --template-param-border: #60a5fa;
 }
 
 body {
@@ -167,6 +174,23 @@ body {
 
 [data-theme="dark"] ::-webkit-scrollbar-thumb:hover {
   background: #5a5a7a;
+}
+
+/* Config generation binding highlight */
+.config-generation-binding {
+  background-color: rgba(59, 130, 246, 0.22);
+  border-bottom: 1px solid rgba(59, 130, 246, 0.75);
+}
+
+.font-mono {
+  font-family: var(--font-mono) !important;
+}
+
+.template-parameter-highlight {
+  background-color: var(--template-param-bg) !important;
+  color: var(--template-param-text) !important;
+  border-bottom: 1px solid var(--template-param-border);
+  border-radius: 3px;
 }
 
 /* Theme transition */

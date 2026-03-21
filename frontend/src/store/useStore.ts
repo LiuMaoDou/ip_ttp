@@ -1,14 +1,37 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import {
+  createGenerationTemplate,
   createTemplate,
+  deleteGenerationTemplate as deleteGenerationTemplateRequest,
   deleteTemplate as deleteTemplateRequest,
+  getGenerationTemplates,
   getTemplates,
+  renderGenerationFiles,
+  updateGenerationTemplate,
   updateTemplate
 } from '../services/api'
-import type { ParseResult, Pattern, SavedTemplate } from '../services/api'
+import type {
+  GenerationBinding,
+  GenerationRenderResult,
+  GenerationSourceTemplate,
+  GenerationTemplate,
+  GenerationTemplatePayload,
+  ParseResult,
+  Pattern,
+  SavedTemplate
+} from '../services/api'
 
-export type { ParseResult, Pattern, SavedTemplate } from '../services/api'
+export type {
+  GenerationBinding,
+  GenerationRenderResult,
+  GenerationSourceTemplate,
+  GenerationTemplate,
+  GenerationTemplatePayload,
+  ParseResult,
+  Pattern,
+  SavedTemplate
+} from '../services/api'
 
 export type VariableSyntaxMode = 'variable' | 'ignore' | 'headers' | 'end'
 
@@ -71,6 +94,14 @@ export interface FileParseResult {
   errorType?: string
 }
 
+export interface GenerationUploadedFile {
+  id: string
+  file: File
+  name: string
+  size: number
+  content: string
+}
+
 interface PreparedVariable extends Variable {
   currentText: string
 }
@@ -98,6 +129,18 @@ interface AppState {
   selectedTestFileIds: string[] | null
   isParsing: boolean
 
+  generationTemplateText: string
+  selectedGenerationTemplateId: string | null
+  selectedGenerationResultIndex: number
+  generationBindings: GenerationBinding[]
+  generationTemplates: GenerationTemplate[]
+  generationUploadedFiles: GenerationUploadedFile[]
+  generationResults: GenerationRenderResult[]
+  selectedGenerationFileId: string | null
+  selectedGenerationSourceTemplateIds: string[]
+  isLoadingGenerationTemplates: boolean
+  isGeneratingConfig: boolean
+
   patterns: Record<string, Pattern>
 
   setSampleText: (text: string) => void
@@ -111,6 +154,7 @@ interface AppState {
   setTemplateName: (name: string) => void
   generateTemplate: () => string
   clearVariables: () => void
+  newTemplate: () => void
 
   fetchSavedTemplates: () => Promise<void>
   saveTemplate: (name: string, description: string) => Promise<void>
@@ -128,6 +172,21 @@ interface AppState {
   setSelectedTestFileIds: (selectedFileIds: string[] | null | ((current: string[] | null) => string[] | null)) => void
   clearFileResults: () => void
   setIsParsing: (isParsing: boolean) => void
+
+  setGenerationTemplateText: (text: string) => void
+  setGenerationBindings: (bindings: GenerationBinding[] | ((current: GenerationBinding[]) => GenerationBinding[])) => void
+  addGenerationUploadedFile: (file: GenerationUploadedFile) => void
+  removeGenerationUploadedFile: (id: string) => void
+  setSelectedGenerationFileId: (id: string | null) => void
+  clearGenerationUploadedFiles: () => void
+  setSelectedGenerationResultIndex: (index: number) => void
+  setSelectedGenerationTemplateId: (id: string | null) => void
+  setSelectedGenerationSourceTemplateIds: (ids: string[] | ((current: string[]) => string[])) => void
+  fetchGenerationTemplates: () => Promise<void>
+  saveGenerationTemplate: (name: string, description: string, sourceTemplates: GenerationSourceTemplate[]) => Promise<void>
+  loadGenerationTemplate: (id: string) => Promise<void>
+  deleteGenerationTemplate: (id: string) => Promise<void>
+  runGeneration: (options?: { name?: string; description?: string }) => Promise<void>
 
   setPatterns: (patterns: Record<string, Pattern>) => void
 
@@ -155,6 +214,49 @@ function toSavedTemplatePayload(state: Pick<AppState, 'sampleText' | 'variables'
     groups: state.groups as unknown as Array<Record<string, unknown>>,
     generatedTemplate: state.generatedTemplate
   }
+}
+
+function toGenerationTemplatePayload(state: Pick<AppState, 'generationTemplateText' | 'generationBindings'>, name: string, description: string, sourceTemplates: GenerationSourceTemplate[]): GenerationTemplatePayload {
+  return {
+    name,
+    description,
+    templateText: state.generationTemplateText,
+    sourceTemplates,
+    bindings: state.generationBindings
+  }
+}
+
+export function buildGenerationSourceTemplates(
+  savedTemplates: SavedTemplate[],
+  selectedIds: string[],
+  usedAliases: Set<string> = new Set<string>()
+): GenerationSourceTemplate[] {
+  const savedTemplatesById = new Map(savedTemplates.map((template) => [template.id, template]))
+
+  return selectedIds
+    .map((id) => savedTemplatesById.get(id))
+    .filter((template): template is SavedTemplate => Boolean(template))
+    .map((template) => {
+      const baseAlias = (template.name || 'template')
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'template'
+
+      let alias = baseAlias
+      let index = 2
+      while (usedAliases.has(alias)) {
+        alias = `${baseAlias}_${index}`
+        index += 1
+      }
+      usedAliases.add(alias)
+
+      return {
+        templateId: template.id,
+        templateName: template.name,
+        templateAlias: alias
+      }
+    })
 }
 
 function isValidPositiveInteger(value: number): boolean {
@@ -250,6 +352,17 @@ export const useStore = create<AppState>()(
       selectedResultIndex: 0,
       selectedTestFileIds: null,
       isParsing: false,
+      generationTemplateText: '',
+      selectedGenerationTemplateId: null,
+      selectedGenerationResultIndex: 0,
+      generationBindings: [],
+      generationTemplates: [],
+      generationUploadedFiles: [],
+      generationResults: [],
+      selectedGenerationFileId: null,
+      selectedGenerationSourceTemplateIds: [],
+      isLoadingGenerationTemplates: false,
+      isGeneratingConfig: false,
       patterns: {},
 
       setSampleText: (text) => set({ sampleText: text }),
@@ -550,6 +663,15 @@ export const useStore = create<AppState>()(
         selectedSavedTemplateId: null
       }),
 
+      newTemplate: () => set({
+        sampleText: '',
+        variables: [],
+        groups: [],
+        generatedTemplate: '',
+        templateName: '',
+        selectedSavedTemplateId: null
+      }),
+
       fetchSavedTemplates: async () => {
         set({ isLoadingTemplates: true })
         try {
@@ -660,6 +782,124 @@ export const useStore = create<AppState>()(
       clearFileResults: () => set({ fileResults: [], selectedResultIndex: 0 }),
       setIsParsing: (isParsing) => set({ isParsing }),
 
+      setGenerationTemplateText: (text) => set({ generationTemplateText: text }),
+      setGenerationBindings: (bindings) => set((state) => ({
+        generationBindings: typeof bindings === 'function'
+          ? bindings(state.generationBindings)
+          : bindings
+      })),
+      addGenerationUploadedFile: (file) => set((state) => ({
+        generationUploadedFiles: [...state.generationUploadedFiles, file]
+      })),
+      removeGenerationUploadedFile: (id) => set((state) => {
+        const nextFiles = state.generationUploadedFiles.filter((file) => file.id !== id)
+        return {
+          generationUploadedFiles: nextFiles,
+          selectedGenerationFileId: state.selectedGenerationFileId === id ? (nextFiles[0]?.id || null) : state.selectedGenerationFileId
+        }
+      }),
+      setSelectedGenerationFileId: (id) => set({ selectedGenerationFileId: id }),
+      clearGenerationUploadedFiles: () => set({ generationUploadedFiles: [], selectedGenerationFileId: null }),
+      setSelectedGenerationResultIndex: (index) => set({ selectedGenerationResultIndex: index }),
+      setSelectedGenerationTemplateId: (id) => set({ selectedGenerationTemplateId: id }),
+      setSelectedGenerationSourceTemplateIds: (ids) => set((state) => ({
+        selectedGenerationSourceTemplateIds: typeof ids === 'function' ? ids(state.selectedGenerationSourceTemplateIds) : ids
+      })),
+      fetchGenerationTemplates: async () => {
+        set({ isLoadingGenerationTemplates: true })
+        try {
+          const generationTemplates = await getGenerationTemplates()
+          set({ generationTemplates })
+        } finally {
+          set({ isLoadingGenerationTemplates: false })
+        }
+      },
+      saveGenerationTemplate: async (name, description, sourceTemplates) => {
+        const state = get()
+        const payload = toGenerationTemplatePayload(state, name, description, sourceTemplates)
+
+        if (state.selectedGenerationTemplateId) {
+          const updatedTemplate = await updateGenerationTemplate(state.selectedGenerationTemplateId, payload)
+          set((current) => ({
+            generationTemplates: current.generationTemplates.map((template) => (
+              template.id === updatedTemplate.id ? updatedTemplate : template
+            )),
+            selectedGenerationTemplateId: updatedTemplate.id
+          }))
+          return
+        }
+
+        const createdTemplate = await createGenerationTemplate(payload)
+        set((current) => ({
+          generationTemplates: [...current.generationTemplates, createdTemplate],
+          selectedGenerationTemplateId: createdTemplate.id
+        }))
+      },
+      loadGenerationTemplate: async (id) => {
+        const state = get()
+        const template = state.generationTemplates.find((generationTemplate) => generationTemplate.id === id)
+        if (!template) {
+          return
+        }
+
+        set({
+          generationTemplateText: template.templateText,
+          generationBindings: template.bindings,
+          selectedGenerationTemplateId: template.id,
+          selectedGenerationSourceTemplateIds: template.sourceTemplates.map((sourceTemplate) => sourceTemplate.templateId)
+        })
+      },
+      deleteGenerationTemplate: async (id) => {
+        await deleteGenerationTemplateRequest(id)
+        set((state) => ({
+          generationTemplates: state.generationTemplates.filter((template) => template.id !== id),
+          selectedGenerationTemplateId: state.selectedGenerationTemplateId === id ? null : state.selectedGenerationTemplateId
+        }))
+      },
+      runGeneration: async (options) => {
+        const state = get()
+        const sourceTemplates = buildGenerationSourceTemplates(
+          state.savedTemplates,
+          state.selectedGenerationSourceTemplateIds
+        )
+        const selectedTemplate = state.generationTemplates.find(
+          (template) => template.id === state.selectedGenerationTemplateId
+        )
+        const draftTemplate = toGenerationTemplatePayload(
+          state,
+          options?.name?.trim() || selectedTemplate?.name || 'Unsaved generation template',
+          options?.description ?? selectedTemplate?.description ?? '',
+          sourceTemplates
+        )
+
+        if (!draftTemplate.templateText.trim() || state.generationUploadedFiles.length === 0) {
+          set({ generationResults: [] })
+          return
+        }
+
+        set({ isGeneratingConfig: true, generationResults: [], selectedGenerationResultIndex: 0 })
+        try {
+          const results = await renderGenerationFiles(
+            draftTemplate,
+            state.generationUploadedFiles.map((file) => file.file),
+            state.selectedGenerationTemplateId
+          )
+          set({ generationResults: results, selectedGenerationResultIndex: 0 })
+        } catch (error) {
+          set({
+            generationResults: [{
+              fileName: 'Request Error',
+              success: false,
+              error: error instanceof Error ? error.message : 'Request failed',
+              errorType: 'RequestError'
+            }],
+            selectedGenerationResultIndex: 0
+          })
+        } finally {
+          set({ isGeneratingConfig: false })
+        }
+      },
+
       setPatterns: (patterns) => set({ patterns }),
 
       toggleTheme: () => {
@@ -683,7 +923,12 @@ export const useStore = create<AppState>()(
         selectedFileId: state.selectedFileId,
         fileResults: state.fileResults,
         selectedResultIndex: state.selectedResultIndex,
-        selectedTestFileIds: state.selectedTestFileIds
+        selectedTestFileIds: state.selectedTestFileIds,
+        generationTemplateText: state.generationTemplateText,
+        generationBindings: state.generationBindings,
+        selectedGenerationTemplateId: state.selectedGenerationTemplateId,
+        selectedGenerationResultIndex: state.selectedGenerationResultIndex,
+        selectedGenerationSourceTemplateIds: state.selectedGenerationSourceTemplateIds
       })
     }
   )

@@ -43,7 +43,19 @@
       "Bash(powershell -NoProfile -Command '$procs = Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like \"*uvicorn*app.main:app*8000*\" }; $procs | Select-Object ProcessId, Name, CommandLine | Format-Table -Wrap -AutoSize')",
       "Bash(powershell -NoProfile -Command \"Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalPort, OwningProcess, State | Format-Table -AutoSize\")",
       "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { \\\\$_.CommandLine -like '*uvicorn*8000*' -or \\\\$_.CommandLine -like '*app.main:app*8000*' } | Select-Object ProcessId, Name, CommandLine | Format-Table -Wrap -AutoSize\")",
-      "Bash(tasklist:*)"
+      "Bash(tasklist:*)",
+      "Bash(powershell -NoProfile -Command \"Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -in \\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique\\) } | Select-Object ProcessId,Name,CommandLine | Format-List\")",
+      "Bash(powershell -NoProfile -Command '& { Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,OwningProcess | Format-List }')",
+      "Bash(powershell -NoProfile -Command '& { $pids = @\\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique\\); foreach \\($pid in $pids\\) { Get-CimInstance Win32_Process -Filter \"ProcessId = $pid\" | Select-Object ProcessId, Name, CommandLine | Format-List } }')",
+      "Bash(powershell -NoProfile -Command '& { $procIds = @\\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique\\); foreach \\($procId in $procIds\\) { Get-CimInstance Win32_Process -Filter \"ProcessId = $procId\" | Select-Object ProcessId, Name, CommandLine | Format-List } }')",
+      "Bash(powershell -NoProfile -Command '& { Get-CimInstance Win32_Process -Filter \"ProcessId = 17728\" | Select-Object ProcessId, ParentProcessId, CreationDate, ExecutablePath, CommandLine | Format-List }')",
+      "Bash(powershell -NoProfile -Command '& { Get-Item \"D:\\\\2026\\\\ip_ttp\\\\backend\\\\app\\\\main.py\", \"D:\\\\2026\\\\ip_ttp\\\\backend\\\\app\\\\routers\\\\generation.py\" | Select-Object FullName, LastWriteTime | Format-List }')",
+      "Bash(powershell -NoProfile -Command '& { $procIds = @\\(15168,17728,27488\\) | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }; if \\($procIds.Count -gt 0\\) { Stop-Process -Id $procIds -Force } }')",
+      "Bash(./start-dev.sh)",
+      "Bash(bash -n \"/d/2026/ip_ttp/start-dev.sh\")",
+      "Bash(findstr :8000)",
+      "Bash(findstr :5173)",
+      "Bash(git:*)"
     ]
   }
 }

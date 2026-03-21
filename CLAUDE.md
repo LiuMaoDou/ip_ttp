@@ -9,7 +9,7 @@ This repository contains two related parts:
 1. **TTP core library** (`ttp/`) — the Python parser that turns template syntax into regex-driven parsing results.
 2. **TTP Web UI** (`backend/` + `frontend/`) — a FastAPI + React app for building templates interactively, testing parse output, and persisting saved templates.
 
-Most automated tests still target the **core library** under `test/pytest/`, but that directory also contains the Web UI backend regression tests.
+Most automated tests still target the **core library** under `test/pytest/`, but that directory also contains the Web UI backend regression tests. The top-level `README.md` is primarily about the core parser library and examples; the Web UI workflow is defined mostly by `backend/`, `frontend/`, and the Web UI pytest files.
 
 ## Common Development Commands
 
@@ -35,6 +35,10 @@ cd test/pytest && poetry run pytest test_misc.py::test_quick_parse -vv
 cd test/pytest && poetry run pytest test_web_ui_template_service.py -vv
 cd test/pytest && poetry run pytest test_web_ui_csv_output.py -vv
 cd test/pytest && poetry run pytest test_web_ui_parse_api.py -vv
+cd test/pytest && poetry run pytest test_web_ui_generation_api.py -vv
+
+# Run one Web UI backend test case
+cd test/pytest && poetry run pytest test_web_ui_generation_api.py::test_render_generation_files -vv
 
 # Run pre-commit hooks
 poetry run pre-commit run --all-files
@@ -58,6 +62,8 @@ cd backend && python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 80
 # Run backend with a custom SQLite database path
 cd backend && TTP_WEB_DB_PATH=./data/ttp_web.dev.db python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+The backend imports the local `ttp/` package via `app/services/ttp_service.py`, so running from `backend/` should still exercise the checked-out parser code instead of a globally installed package.
 
 ### Frontend UI (`frontend/`)
 
@@ -91,6 +97,8 @@ cd frontend && npm run lint
 # Windows
 start-dev.bat
 ```
+
+The startup scripts now fail fast if `8000` or `5173` is already occupied, and they verify backend readiness before launching the frontend. This avoids the frontend silently connecting to a stale backend process and showing `Backend offline`.
 
 ## High-Level Architecture
 
@@ -141,6 +149,12 @@ Template execution flow is:
   - `POST /api/templates`
   - `PUT /api/templates/{template_id}`
   - `DELETE /api/templates/{template_id}`
+- `app/routers/generation.py` exposes config-generation template CRUD and batch rendering under `/api/generation`:
+  - `GET /api/generation/templates`
+  - `POST /api/generation/templates`
+  - `PUT /api/generation/templates/{template_id}`
+  - `DELETE /api/generation/templates/{template_id}`
+  - `POST /api/generation/render`
 - `app/services/ttp_service.py` is the backend integration point to the core parser:
   - prepends the repository root to `sys.path` before importing `ttp`, so backend runs from `backend/` still use the local `ttp/` package rather than any globally installed `ttp`
   - runs `ttp(...).parse()`
@@ -152,14 +166,20 @@ Template execution flow is:
   - initializes schema on startup
   - stores `variables` and `groups` as JSON blobs in a single `templates` table
   - supports `TTP_WEB_DB_PATH`; default DB path is `backend/data/ttp_web.db`
+- `app/services/generation_service.py` handles a second SQLite-backed persistence flow for saved config-generation templates plus rendering logic:
+  - stores `source_templates` and `bindings` JSON in a `generation_templates` table in the same SQLite database path
+  - `ConfigGenerationService` validates uploaded JSON by required template aliases and renders generation templates from namespaced payloads
+  - bindings are persisted as editor coordinates plus original text and are applied back onto the saved generation template text before render
+  - Jinja2 sandbox rendering is used when available; otherwise a limited `{{ data.path }}` placeholder renderer is used
 - The backend has no general application database beyond the SQLite file used for saved Web UI templates.
 
 ### 4) React frontend (`frontend/src`)
 
-- `App.tsx` is a 2-tab shell:
+- `App.tsx` is a 3-tab shell:
   - **Template Builder**
   - **Test & Results**
-- On startup, `App.tsx` fetches both `/api/patterns` and `/api/templates`, and shows backend connection status in the header.
+  - **Config Generation**
+- On startup, `App.tsx` fetches `/api/patterns`, `/api/templates`, and `/api/generation/templates`, and shows backend connection status in the header.
 - Global app state lives in `store/useStore.ts` using Zustand with `persist` storage key `ttp-web-storage`.
 
 #### Template Builder flow
@@ -194,16 +214,25 @@ Template execution flow is:
 - Download actions support:
   - per-result JSON
   - per-result CSV
-  - per-result Checkup CSV
   - ZIP of all JSON results
   - ZIP of all CSV results
-- Checkup downloads are intentionally only available for the currently selected successful result; there is no bulk Checkup ZIP action.
+  - ZIP of all Checkup CSV results
+- Checkup downloads now use the top-level bulk download flow in `TestResults.tsx`; each archive entry is still named per template/input combination using the `.checkup.csv` suffix.
+
+#### Config Generation flow
+
+- `components/ConfigGeneration/` is the third major UI flow for building output configs from previously parsed template data.
+- The frontend stores config-generation draft text, selected source templates, bindings, uploaded JSON files, and render results in the same Zustand store used by the other tabs.
+- Saved generation templates are backend-backed via `/api/generation/templates`; unsaved generation editor state still lives in persisted browser storage.
+- Generation bindings persist Monaco-style text ranges plus a structured reference (`templateAlias`, `groupPath`, `variableName`, `selector`, `expression`). The backend re-applies those bindings onto saved template text before rendering.
+- Render uploads are JSON files posted to `/api/generation/render`; the backend expects namespaced data keyed by source-template alias, or under a top-level `templates` object.
+- The frontend can generate directly from the current draft without saving first; saving generation templates is an explicit persistence action, not a prerequisite for render.
 
 ### 5) API boundary (`frontend/src/services/api.ts`)
 
 - Axios base URL is `/api`.
 - Development proxy is configured in `frontend/vite.config.ts`.
-- Current Vite proxy target is `http://localhost:8000`, which must match the backend dev server port.
+- Current Vite proxy target is `http://localhost:8000`; if this is changed for debugging, keep it aligned with the backend dev server port.
 - Backend responses stay in `snake_case`; `frontend/src/services/api.ts` maps them into the frontend's `camelCase` types.
 
 ## Important Repo-Specific Notes
@@ -220,7 +249,9 @@ Template execution flow is:
   - `test/pytest/test_web_ui_template_service.py` covers SQLite CRUD and `/api/templates`
   - `test/pytest/test_web_ui_csv_output.py` covers `TTPService` CSV and Checkup CSV behavior
   - `test/pytest/test_web_ui_parse_api.py` covers `/api/parse` response mapping, including `checkup_csv_result`
+  - `test/pytest/test_web_ui_generation_api.py` covers generation template CRUD and `/api/generation/render`
 - **Template Builder coordinate sync matters**: variable/group coordinates are still the persisted contract for saved templates and `generateTemplate()`, but `TemplateBuilder.tsx` relies on Monaco tracking decorations to keep those coordinates aligned while users edit sample text. If you change annotation behavior, preserve that sync path instead of making generation depend directly on live Monaco selection state.
+- **Config generation bindings are also coordinate-based**: `generationBindings` persist text ranges and original text from the editor. Backend rendering validates and reapplies those ranges before templating, so changes to frontend binding capture must stay aligned with `ConfigGenerationService._selection_to_offsets()` and `_apply_bindings()`.
 - **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but there is no checked-in ESLint config in the repository, so lint currently fails for configuration reasons rather than app code errors.
 - **Frontend test wiring is incomplete**: `frontend/vite.config.ts` contains Vitest config, but there is no `test` script in `frontend/package.json`, no checked-in frontend test files, and `setupFiles` points at `frontend/src/test/setup.ts`, which is currently absent.
 - **When adding new TTP functions**:

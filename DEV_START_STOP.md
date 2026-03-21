@@ -26,6 +26,16 @@ npm run dev -- --host 127.0.0.1 --port 5173
 
 ## 一键启动
 
+启动脚本现在会先做两件事：
+
+- 检查 `8000` 和 `5173` 端口是否已被旧进程占用
+- 在启动前端前校验后端是否真的暴露了以下接口：
+  - `/api/patterns`
+  - `/api/templates`
+  - `/api/generation/templates`
+
+如果校验失败，脚本会直接报错退出，避免前端连接到旧后端后显示 `Backend offline`。
+
 ### Windows
 
 ```bat
@@ -57,7 +67,7 @@ Ctrl+C
 如果前端或后端已经退出，但端口还被旧进程占用，可以执行下面的 PowerShell 命令：
 
 ```powershell
-powershell -NoProfile -Command "$ports = @(5173,8000,8001); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique; foreach ($procId in $pids) { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue }"
+powershell -NoProfile -Command "$ports = @(5173,8000); $connections = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort }; $pids = $connections | Select-Object -ExpandProperty OwningProcess -Unique; foreach ($procId in $pids) { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue }"
 ```
 
 ## 常见问题

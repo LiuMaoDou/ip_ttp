@@ -3,14 +3,7 @@ import { useDropzone } from 'react-dropzone'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import { useStore, UploadedFile } from '../../store/useStore'
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
+import { formatFileSize } from '../../utils'
 
 export default function FileInput() {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
@@ -184,7 +177,7 @@ export default function FileInput() {
                 lineNumbers: 'on',
                 wordWrap: 'on',
                 fontSize: 14,
-                fontFamily: 'Consolas, Monaco, monospace',
+                fontFamily: 'var(--font-mono)',
                 scrollBeyondLastLine: false,
                 readOnly: false,
                 automaticLayout: true

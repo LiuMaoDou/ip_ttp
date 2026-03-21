@@ -1,27 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { useStore, FileParseResult, UploadedFile } from '../../store/useStore'
+import { useStore, buildGenerationSourceTemplates, type FileParseResult, type UploadedFile } from '../../store/useStore'
 import { parseText } from '../../services/api'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
+import { formatFileSize, sanitizeFileNameSegment } from '../../utils'
 
 interface TemplateSource {
   id: string
   name: string
   template: string
   source: 'current' | 'saved'
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const sizes = ['B', 'KB', 'MB', 'GB']
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-}
-
-function sanitizeFileNameSegment(value: string): string {
-  return value.replace(/[<>:"/\\|?*\s]+/g, '_').replace(/^_+|_+$/g, '')
 }
 
 function getResultDownloadBaseName(result: FileParseResult): string {
@@ -40,6 +29,38 @@ function getResultCsvDownloadName(result: FileParseResult): string {
 
 function getResultCheckupDownloadName(result: FileParseResult): string {
   return `${getResultDownloadBaseName(result)}.checkup.csv`
+}
+
+function getConfigGenerationDownloadName(fileName: string): string {
+  const baseName = fileName.replace(/\.[^/.]+$/, '') || 'result'
+  return `${baseName}.config-generation.json`
+}
+
+function hasSavedTemplateResult(result: Pick<FileParseResult, 'templateId'>): boolean {
+  return Boolean(result.templateId && result.templateId !== 'current-template')
+}
+
+function buildConfigGenerationPayload(results: FileParseResult[], aliasMap: Map<string, string>): Record<string, unknown> | null {
+  const templates: Record<string, unknown> = {}
+
+  results.forEach((result) => {
+    if (!hasDownloadableResult(result) || !hasSavedTemplateResult(result) || !result.templateId) {
+      return
+    }
+
+    const alias = aliasMap.get(result.templateId)
+    if (!alias) {
+      return
+    }
+
+    templates[alias] = result.result
+  })
+
+  if (Object.keys(templates).length === 0) {
+    return null
+  }
+
+  return { templates }
 }
 
 function hasDownloadableResult(result: Pick<FileParseResult, 'success' | 'result'>): boolean {
@@ -88,6 +109,10 @@ export default function TestResults() {
   } = useStore()
 
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([])
+  const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  const [showResultDownloadMenu, setShowResultDownloadMenu] = useState(false)
+  const bulkDownloadMenuRef = useRef<HTMLDivElement | null>(null)
+  const resultDownloadMenuRef = useRef<HTMLDivElement | null>(null)
 
   const templateOptions = useMemo<TemplateSource[]>(() => {
     const savedOptions = savedTemplates
@@ -146,8 +171,10 @@ export default function TestResults() {
       return
     }
 
-    const kept = (selectedTestFileIds || []).filter((id) => fileIds.includes(id))
-    const nextSelectedFileIds = kept.length > 0 ? kept : fileIds
+    const kept = selectedTestFileIds === null
+      ? null
+      : selectedTestFileIds.filter((id) => fileIds.includes(id))
+    const nextSelectedFileIds = kept === null ? fileIds : kept
 
     const sameSelection =
       selectedTestFileIds !== null &&
@@ -163,6 +190,25 @@ export default function TestResults() {
     }
   }, [files, selectedFileId, selectedTestFileIds, selectFile, setSelectedTestFileIds])
 
+  useEffect(() => {
+    const handleDocumentMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node
+
+      if (showDownloadMenu && bulkDownloadMenuRef.current && !bulkDownloadMenuRef.current.contains(target)) {
+        setShowDownloadMenu(false)
+      }
+
+      if (showResultDownloadMenu && resultDownloadMenuRef.current && !resultDownloadMenuRef.current.contains(target)) {
+        setShowResultDownloadMenu(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleDocumentMouseDown)
+    return () => {
+      document.removeEventListener('mousedown', handleDocumentMouseDown)
+    }
+  }, [showDownloadMenu, showResultDownloadMenu])
+
   const selectedTemplates = useMemo(
     () => templateOptions.filter((option) => selectedTemplateIds.includes(option.id)),
     [templateOptions, selectedTemplateIds]
@@ -174,6 +220,47 @@ export default function TestResults() {
   )
 
   const previewFile = files.find((file) => file.id === selectedFileId) ?? null
+
+  const configGenerationAliasMap = useMemo(() => {
+    const savedTemplateIds = Array.from(new Set(
+      fileResults
+        .filter((result) => hasSavedTemplateResult(result))
+        .map((result) => result.templateId as string)
+    ))
+
+    const sourceTemplates = buildGenerationSourceTemplates(savedTemplates, savedTemplateIds)
+    return new Map(sourceTemplates.map((template) => [template.templateId, template.templateAlias]))
+  }, [fileResults, savedTemplates])
+
+  const groupedConfigGenerationPayloads = useMemo(() => {
+    const grouped = new Map<string, { fileName: string; results: FileParseResult[] }>()
+
+    fileResults.forEach((result) => {
+      if (!hasDownloadableResult(result) || !hasSavedTemplateResult(result)) {
+        return
+      }
+
+      const existing = grouped.get(result.fileId)
+      if (existing) {
+        existing.results.push(result)
+        return
+      }
+
+      grouped.set(result.fileId, {
+        fileName: result.fileName,
+        results: [result]
+      })
+    })
+
+    return Array.from(grouped.values())
+      .map((group) => ({
+        fileName: group.fileName,
+        payload: buildConfigGenerationPayload(group.results, configGenerationAliasMap)
+      }))
+      .filter((group): group is { fileName: string; payload: Record<string, unknown> } => Boolean(group.payload))
+  }, [configGenerationAliasMap, fileResults])
+
+  const canDownloadConfigGeneration = groupedConfigGenerationPayloads.length > 0
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     clearFileResults()
@@ -229,6 +316,21 @@ export default function TestResults() {
         ? current.filter((fileId) => fileId !== id)
         : [...current, id]
     })
+  }
+
+  const handleSelectAllFiles = () => {
+    if (files.length === 0) {
+      return
+    }
+
+    const allFileIds = files.map((file) => file.id)
+    const isAllSelected = (selectedTestFileIds || []).length === files.length
+
+    setSelectedTestFileIds(isAllSelected ? [] : allFileIds)
+
+    if (!isAllSelected && (!selectedFileId || !files.some((file) => file.id === selectedFileId))) {
+      selectFile(files[0].id)
+    }
   }
 
   const handleRemoveFile = (id: string) => {
@@ -351,6 +453,13 @@ export default function TestResults() {
     saveAs(blob, getResultCsvDownloadName(result))
   }
 
+  const handleDownloadSingleCheckup = (result: FileParseResult) => {
+    if (!hasDownloadableCheckupResult(result)) return
+    const csvStr = getCheckupCsvContent(result)
+    const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8' })
+    saveAs(blob, getResultCheckupDownloadName(result))
+  }
+
   const handleDownloadAllJson = async () => {
     const downloadableResults = fileResults.filter(hasDownloadableResult)
     if (downloadableResults.length === 0) return
@@ -391,9 +500,53 @@ export default function TestResults() {
     saveAs(content, 'parse_results_checkup.zip')
   }
 
+  const handleDownloadSingleConfigGenerationJson = (result: FileParseResult) => {
+    if (!hasDownloadableResult(result) || !hasSavedTemplateResult(result) || !result.templateId) return
+
+    const alias = configGenerationAliasMap.get(result.templateId)
+    if (!alias) return
+
+    const payload = {
+      templates: {
+        [alias]: result.result
+      }
+    }
+
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    saveAs(blob, getConfigGenerationDownloadName(result.fileName))
+  }
+
+  const handleDownloadAllConfigGenerationJson = async () => {
+    if (groupedConfigGenerationPayloads.length === 0) return
+
+    if (groupedConfigGenerationPayloads.length === 1) {
+      const [group] = groupedConfigGenerationPayloads
+      const blob = new Blob([JSON.stringify(group.payload, null, 2)], { type: 'application/json' })
+      saveAs(blob, getConfigGenerationDownloadName(group.fileName))
+      return
+    }
+
+    const zip = new JSZip()
+    groupedConfigGenerationPayloads.forEach((group) => {
+      zip.file(getConfigGenerationDownloadName(group.fileName), JSON.stringify(group.payload, null, 2))
+    })
+
+    const content = await zip.generateAsync({ type: 'blob' })
+    saveAs(content, 'parse_results_config_generation.zip')
+  }
+
   const currentResult = fileResults[selectedResultIndex] || fileResults[0]
   const successfulCount = fileResults.filter((result) => result.success).length
   const failedCount = fileResults.filter((result) => result.success === false).length
+  const hasBulkJsonDownload = fileResults.some(hasDownloadableResult)
+  const hasBulkCsvDownload = fileResults.some(hasDownloadableCsvResult)
+  const hasBulkCheckupDownload = fileResults.some(hasDownloadableCheckupResult)
+  const hasBulkDownloads = hasBulkJsonDownload || hasBulkCsvDownload || hasBulkCheckupDownload || canDownloadConfigGeneration
+  const hasResultJsonDownload = currentResult ? hasDownloadableResult(currentResult) : false
+  const hasResultCsvDownload = currentResult ? hasDownloadableCsvResult(currentResult) : false
+  const hasResultCheckupDownload = currentResult ? hasDownloadableCheckupResult(currentResult) : false
+  const hasResultGenerationDownload = currentResult ? hasDownloadableResult(currentResult) && hasSavedTemplateResult(currentResult) : false
+  const hasResultDownloads = hasResultJsonDownload || hasResultCsvDownload || hasResultCheckupDownload || hasResultGenerationDownload
   const canRun = !isLoadingTemplates && selectedTemplates.length > 0 && (selectedFiles.length > 0 || (!files.length && !!inputText.trim()))
 
   return (
@@ -429,45 +582,76 @@ export default function TestResults() {
               'Run Test'
             )}
           </button>
-          {fileResults.length > 0 && (fileResults.some(hasDownloadableResult) || fileResults.some(hasDownloadableCsvResult) || fileResults.some(hasDownloadableCheckupResult)) && (
-            <>
-              {fileResults.some(hasDownloadableResult) && (
-                <button
-                  onClick={handleDownloadAllJson}
-                  className="btn flex items-center gap-1"
-                  title="Download all results as JSON ZIP"
+          {hasBulkDownloads && (
+            <div className="relative" ref={bulkDownloadMenuRef}>
+              <button
+                onClick={() => setShowDownloadMenu((current) => !current)}
+                className="btn flex items-center gap-1"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {showDownloadMenu && (
+                <div
+                  className="absolute right-0 mt-2 min-w-40 rounded-md border shadow-lg z-20 overflow-hidden"
+                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
                 >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download JSON
-                </button>
+                  {hasBulkJsonDownload && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        void handleDownloadAllJson()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      JSON
+                    </button>
+                  )}
+                  {hasBulkCsvDownload && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        void handleDownloadAllCsv()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      CSV
+                    </button>
+                  )}
+                  {hasBulkCheckupDownload && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        void handleDownloadAllCheckup()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Checkup
+                    </button>
+                  )}
+                  {canDownloadConfigGeneration && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        void handleDownloadAllConfigGenerationJson()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Generation
+                    </button>
+                  )}
+                </div>
               )}
-              {fileResults.some(hasDownloadableCsvResult) && (
-                <button
-                  onClick={handleDownloadAllCsv}
-                  className="btn flex items-center gap-1"
-                  title="Download all results as CSV ZIP"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download CSV
-                </button>
-              )}
-              {fileResults.some(hasDownloadableCheckupResult) && (
-                <button
-                  onClick={handleDownloadAllCheckup}
-                  className="btn flex items-center gap-1"
-                  title="Download all checkup results as CSV ZIP"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                  </svg>
-                  Download Checkup
-                </button>
-              )}
-            </>
+            </div>
           )}
         </div>
       </div>
@@ -475,7 +659,7 @@ export default function TestResults() {
       <div
         className="flex-1 grid min-h-0"
         style={{
-          gridTemplateColumns: '11rem minmax(0, 1fr) 11rem minmax(0, 1fr)',
+          gridTemplateColumns: '14rem minmax(0, 1fr) minmax(0, 1fr) 14rem',
           gridTemplateRows: 'auto minmax(0, 1fr)'
         }}
       >
@@ -519,9 +703,6 @@ export default function TestResults() {
                         />
                         <div className="min-w-0 flex-1">
                           <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{template.name}</p>
-                          <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
-                            {template.source === 'current' ? 'Current' : 'Saved'}
-                          </p>
                         </div>
                       </div>
                     </div>
@@ -553,9 +734,19 @@ export default function TestResults() {
           <div className="flex-1 overflow-auto p-2">
             <div className="flex items-center justify-between mb-2 px-1">
               <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Files</h4>
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                {(selectedTestFileIds || []).length}/{files.length}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSelectAllFiles}
+                  className="text-xs"
+                  style={{ color: 'var(--accent-primary)' }}
+                  disabled={files.length === 0}
+                >
+                  Select All
+                </button>
+                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {(selectedTestFileIds || []).length}/{files.length}
+                </span>
+              </div>
             </div>
             {files.length === 0 ? (
               <p className="text-sm px-1 py-4 text-center" style={{ color: 'var(--text-muted)' }}>
@@ -673,7 +864,137 @@ export default function TestResults() {
           )}
         </div>
 
-        <div className="border-r overflow-auto" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
+        <div className="overflow-auto p-4 min-w-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          {!fileResults.length ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center" style={{ color: 'var(--text-muted)' }}>
+                <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-sm mb-2">No results yet</p>
+                <p className="text-sm mb-2">1. Select one or more templates</p>
+                <p className="text-sm mb-2">2. Select one or more files</p>
+                <p className="text-sm">3. Click "Run Test"</p>
+                {selectedTemplates.length === 0 && (
+                  <p className="text-sm mt-4" style={{ color: 'var(--error)' }}>No template selected</p>
+                )}
+              </div>
+            </div>
+          ) : currentResult?.success ? (
+            <div>
+              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
+                <svg className="w-5 h-5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                <span className="font-medium" style={{ color: '#22c55e' }}>Parse successful</span>
+                {currentResult && (
+                  <span className="text-sm ml-auto mr-2 truncate" style={{ color: 'var(--text-muted)' }}>
+                    {currentResult.templateName ? `${currentResult.templateName} · ${currentResult.fileName}` : currentResult.fileName}
+                  </span>
+                )}
+                {hasResultDownloads && (
+                  <div className="relative" ref={resultDownloadMenuRef}>
+                    <button
+                      onClick={() => setShowResultDownloadMenu((current) => !current)}
+                      className="btn text-sm flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showResultDownloadMenu && currentResult && (
+                      <div
+                        className="absolute right-0 mt-2 min-w-40 rounded-md border shadow-lg z-20 overflow-hidden"
+                        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                      >
+                        {hasResultJsonDownload && (
+                          <button
+                            onClick={() => {
+                              setShowResultDownloadMenu(false)
+                              handleDownloadSingleJson(currentResult)
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            JSON
+                          </button>
+                        )}
+                        {hasResultCsvDownload && (
+                          <button
+                            onClick={() => {
+                              setShowResultDownloadMenu(false)
+                              handleDownloadSingleCsv(currentResult)
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            CSV
+                          </button>
+                        )}
+                        {hasResultCheckupDownload && (
+                          <button
+                            onClick={() => {
+                              setShowResultDownloadMenu(false)
+                              handleDownloadSingleCheckup(currentResult)
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            Checkup
+                          </button>
+                        )}
+                        {hasResultGenerationDownload && (
+                          <button
+                            onClick={() => {
+                              setShowResultDownloadMenu(false)
+                              handleDownloadSingleConfigGenerationJson(currentResult)
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            Generation
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: theme === 'dark' ? '#1e1e2e' : '#f8fafc', border: `1px solid ${theme === 'dark' ? '#313244' : '#e2e8f0'}` }}>
+                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
+                  {JSON.stringify(currentResult.result, null, 2)}
+                </pre>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+                <svg className="w-5 h-5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+                <span className="font-medium" style={{ color: '#ef4444' }}>Parse failed</span>
+                {currentResult && (
+                  <span className="text-sm ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
+                    {currentResult.templateName ? `${currentResult.templateName} · ${currentResult.fileName}` : currentResult.fileName}
+                  </span>
+                )}
+              </div>
+              <div className="rounded-lg p-4" style={{ backgroundColor: theme === 'dark' ? '#1c1917' : '#fef2f2', border: `1px solid ${theme === 'dark' ? '#292524' : '#fecaca'}` }}>
+                {currentResult?.errorType && (
+                  <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
+                )}
+                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#d6d3d1' : '#57534e' }}>{currentResult?.error}</pre>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="border-l overflow-auto" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <div className="p-2 h-full">
             {fileResults.length === 0 ? (
               <div className="h-full flex items-center justify-center text-center px-2" style={{ color: 'var(--text-muted)' }}>
@@ -713,89 +1034,6 @@ export default function TestResults() {
               </div>
             )}
           </div>
-        </div>
-
-        <div className="overflow-auto p-4 min-w-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
-          {!fileResults.length ? (
-            <div className="h-full flex items-center justify-center">
-              <div className="text-center" style={{ color: 'var(--text-muted)' }}>
-                <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <p className="text-sm mb-2">No results yet</p>
-                <p className="text-sm mb-2">1. Select one or more templates</p>
-                <p className="text-sm mb-2">2. Select one or more files</p>
-                <p className="text-sm">3. Click "Run Test"</p>
-                {selectedTemplates.length === 0 && (
-                  <p className="text-sm mt-4" style={{ color: 'var(--error)' }}>No template selected</p>
-                )}
-              </div>
-            </div>
-          ) : currentResult?.success ? (
-            <div>
-              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
-                <svg className="w-5 h-5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
-                <span className="font-medium" style={{ color: '#22c55e' }}>Parse successful</span>
-                {currentResult && (
-                  <span className="text-sm ml-auto mr-2 truncate" style={{ color: 'var(--text-muted)' }}>
-                    {currentResult.templateName ? `${currentResult.templateName} · ${currentResult.fileName}` : currentResult.fileName}
-                  </span>
-                )}
-                {hasDownloadableResult(currentResult) && (
-                  <button
-                    onClick={() => handleDownloadSingleJson(currentResult)}
-                    className="btn text-sm flex items-center gap-1"
-                    title="Download as JSON"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    JSON
-                  </button>
-                )}
-                {hasDownloadableCsvResult(currentResult) && (
-                  <button
-                    onClick={() => handleDownloadSingleCsv(currentResult)}
-                    className="btn text-sm flex items-center gap-1"
-                    title="Download as CSV"
-                  >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                    CSV
-                  </button>
-                )}
-              </div>
-              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: theme === 'dark' ? '#1e1e2e' : '#f8fafc', border: `1px solid ${theme === 'dark' ? '#313244' : '#e2e8f0'}` }}>
-                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
-                  {JSON.stringify(currentResult.result, null, 2)}
-                </pre>
-              </div>
-            </div>
-          ) : (
-            <div>
-              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
-                <svg className="w-5 h-5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-                <span className="font-medium" style={{ color: '#ef4444' }}>Parse failed</span>
-                {currentResult && (
-                  <span className="text-sm ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
-                    {currentResult.templateName ? `${currentResult.templateName} · ${currentResult.fileName}` : currentResult.fileName}
-                  </span>
-                )}
-              </div>
-              <div className="rounded-lg p-4" style={{ backgroundColor: theme === 'dark' ? '#1c1917' : '#fef2f2', border: `1px solid ${theme === 'dark' ? '#292524' : '#fecaca'}` }}>
-                {currentResult?.errorType && (
-                  <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
-                )}
-                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#d6d3d1' : '#57534e' }}>{currentResult?.error}</pre>
-              </div>
-            </div>
-          )}
         </div>
       </div>
     </div>
