@@ -1,0 +1,12 @@
+{
+  "templates": {
+    "interfaces": {
+      "loopbacks": {
+        "ip": "1.1.1.1/32"
+      }
+    },
+    "neighbors": {
+      "peer": "10.0.0.1"
+    }
+  }
+}

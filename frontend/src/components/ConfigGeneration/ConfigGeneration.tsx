@@ -4,6 +4,7 @@ import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor } from 'monaco-editor'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
+import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import BindingSelectorModal from './BindingSelectorModal'
 import {
   useStore,
@@ -29,6 +30,7 @@ interface BindableSelector {
   label: string
   expression: string
   sourceTemplate: GenerationSourceTemplate
+  templateLabel: string
   variableName: string
   groupPath: string[]
 }
@@ -86,6 +88,7 @@ function deriveBindableSelectors(savedTemplate: SavedTemplate, sourceTemplate: G
       label: selector,
       expression: getExpression(sourceTemplate.templateAlias, groupPath, variable.name),
       sourceTemplate,
+      templateLabel: [savedTemplate.vendor, ...(savedTemplate.categoryPath || []), savedTemplate.name].filter(Boolean).join(' / '),
       variableName: variable.name,
       groupPath
     }
@@ -234,7 +237,8 @@ export default function ConfigGeneration() {
   const [currentSelection, setCurrentSelection] = useState<CurrentSelection | null>(null)
   const [isBindingModalOpen, setIsBindingModalOpen] = useState(false)
   const [templateNameInput, setTemplateNameInput] = useState('')
-  const [templateDescriptionInput, setTemplateDescriptionInput] = useState('')
+  const [templateVendorInput, setTemplateVendorInput] = useState('Unassigned')
+  const [templateCategoryInput, setTemplateCategoryInput] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
 
@@ -251,6 +255,8 @@ export default function ConfigGeneration() {
     setSelectedGenerationTemplateId,
     selectedGenerationSourceTemplateIds,
     setSelectedGenerationSourceTemplateIds,
+    currentGenerationTemplateVendor,
+    currentGenerationTemplateCategoryPath,
     generationUploadedFiles,
     addGenerationUploadedFile,
     removeGenerationUploadedFile,
@@ -264,6 +270,10 @@ export default function ConfigGeneration() {
     isGeneratingConfig,
     savedTemplates,
     isLoadingGenerationTemplates,
+    isLoadingTemplateDirectories,
+    vendors,
+    parseCategories,
+    generationCategories,
     theme
   } = useStore()
 
@@ -309,8 +319,9 @@ export default function ConfigGeneration() {
 
   useEffect(() => {
     setTemplateNameInput(selectedGenerationTemplate?.name || '')
-    setTemplateDescriptionInput(selectedGenerationTemplate?.description || '')
-  }, [selectedGenerationTemplate])
+    setTemplateVendorInput(selectedGenerationTemplate?.vendor || currentGenerationTemplateVendor || 'Unassigned')
+    setTemplateCategoryInput((selectedGenerationTemplate?.categoryPath || currentGenerationTemplateCategoryPath || []).join('/'))
+  }, [selectedGenerationTemplate, currentGenerationTemplateVendor, currentGenerationTemplateCategoryPath])
 
   const renderedTemplatePreview = useMemo(() => {
     try {
@@ -545,7 +556,8 @@ export default function ConfigGeneration() {
 
   const handleOpenSaveModal = () => {
     setTemplateNameInput(selectedGenerationTemplate?.name || '')
-    setTemplateDescriptionInput(selectedGenerationTemplate?.description || '')
+    setTemplateVendorInput(selectedGenerationTemplate?.vendor || currentGenerationTemplateVendor || 'Unassigned')
+    setTemplateCategoryInput((selectedGenerationTemplate?.categoryPath || currentGenerationTemplateCategoryPath || []).join('/'))
     setShowSaveModal(true)
   }
 
@@ -556,9 +568,12 @@ export default function ConfigGeneration() {
 
     setIsSaving(true)
     try {
+      const categoryPath = templateCategoryInput.split('/').map((segment) => segment.trim()).filter(Boolean)
       await saveGenerationTemplate(
         templateNameInput.trim(),
-        templateDescriptionInput,
+        '',
+        templateVendorInput,
+        categoryPath,
         sourceTemplates
       )
       setShowSaveModal(false)
@@ -579,7 +594,7 @@ export default function ConfigGeneration() {
   const handleGenerate = async () => {
     await runGeneration({
       name: templateNameInput,
-      description: templateDescriptionInput
+      description: ''
     })
 
     const { generationResults: latestResults } = useStore.getState()
@@ -639,11 +654,26 @@ export default function ConfigGeneration() {
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               autoFocus
             />
-            <textarea
-              value={templateDescriptionInput}
-              onChange={(event) => setTemplateDescriptionInput(event.target.value)}
-              placeholder="Description"
-              className="w-full px-3 py-2 border rounded-md mb-4 h-20 resize-none focus:outline-none focus:ring-2"
+            <input
+              type="text"
+              list="generation-template-vendors"
+              value={templateVendorInput}
+              onChange={(event) => setTemplateVendorInput(event.target.value)}
+              placeholder="Vendor"
+              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
+              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+            />
+            <datalist id="generation-template-vendors">
+              {vendors.map((vendor) => (
+                <option key={vendor.name} value={vendor.name} />
+              ))}
+            </datalist>
+            <input
+              type="text"
+              value={templateCategoryInput}
+              onChange={(event) => setTemplateCategoryInput(event.target.value)}
+              placeholder="Folder path (e.g. Core/BGP)"
+              className="w-full px-3 py-2 border rounded-md mb-4 focus:outline-none focus:ring-2"
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
             />
             <div className="flex justify-end gap-2">
@@ -671,7 +701,7 @@ export default function ConfigGeneration() {
             id: selector.id,
             label: selector.label,
             expression: selector.expression,
-            templateName: selector.sourceTemplate.templateName
+            templateName: selector.templateLabel
           }))}
           onConfirm={handleBindingModalConfirm}
           onCancel={handleBindingModalCancel}
@@ -720,63 +750,39 @@ export default function ConfigGeneration() {
         }}
       >
         <div className="border-r row-span-2 overflow-auto" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div className="p-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Generation Templates</h3>
-            {isLoadingGenerationTemplates ? (
-              <p style={{ color: 'var(--text-muted)' }}>Loading...</p>
-            ) : generationTemplates.length === 0 ? (
-              <p style={{ color: 'var(--text-muted)' }}>No saved generation templates</p>
-            ) : (
-              <div className="space-y-1">
-                {generationTemplates.map((template) => {
-                  const isSelected = template.id === selectedGenerationTemplateId
-                  return (
-                    <div
-                      key={template.id}
-                      className="p-2 rounded border cursor-pointer"
-                      style={{
-                        borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                        backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.12)' : 'transparent'
-                      }}
-                      onClick={() => void handleLoad(template.id)}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="truncate">{template.name}</span>
-                        <button
-                          className="text-xs"
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            void handleDelete(template.id)
-                          }}
-                          style={{ color: 'var(--text-muted)' }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+          <div className="border-b" style={{ borderColor: 'var(--border-color)' }}>
+            <TemplateDirectoryTree
+              title="Generation Templates"
+              vendors={vendors}
+              categories={generationCategories}
+              templates={generationTemplates}
+              loading={isLoadingGenerationTemplates || isLoadingTemplateDirectories}
+              emptyText="No saved generation templates"
+              activeTemplateId={selectedGenerationTemplateId}
+              manageDirectories
+              onTemplateClick={(templateId) => { void handleLoad(templateId) }}
+              onMoveTemplate={(templateId, vendor, categoryPath) => useStore.getState().moveGenerationTemplate(templateId, vendor, categoryPath)}
+              onDeleteTemplate={(templateId) => { void handleDelete(templateId) }}
+              onCreateVendor={(name) => useStore.getState().createVendor(name)}
+              onRenameVendor={(currentName, nextName) => useStore.getState().renameVendor(currentName, nextName)}
+              onDeleteVendor={(name) => useStore.getState().deleteVendor(name)}
+              onCreateCategory={(vendor, name, parentId) => useStore.getState().createCategory('generation', vendor, name, parentId)}
+              onRenameCategory={(categoryId, vendor, name, parentId) => useStore.getState().updateCategory('generation', categoryId, vendor, name, parentId)}
+              onDeleteCategory={(categoryId) => useStore.getState().deleteCategory('generation', categoryId)}
+            />
           </div>
 
-          <div className="p-3">
-            <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Parse Templates</h3>
-            <div className="space-y-1 max-h-64 overflow-auto">
-              {savedTemplates.map((template) => {
-                const checked = selectedGenerationSourceTemplateIds.includes(template.id)
-                return (
-                  <label key={template.id} className="flex items-start gap-2 p-2 rounded cursor-pointer" style={{ backgroundColor: checked ? 'rgba(59, 130, 246, 0.12)' : 'transparent' }}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleSourceTemplate(template.id)} className="mt-1" />
-                    <div className="min-w-0">
-                      <div className="truncate">{template.name}</div>
-                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{template.description || 'No description'}</div>
-                    </div>
-                  </label>
-                )
-              })}
-            </div>
-          </div>
+          <TemplateDirectoryTree
+            title="Parse Templates"
+            vendors={vendors}
+            categories={parseCategories}
+            templates={savedTemplates}
+            loading={isLoadingTemplateDirectories}
+            emptyText="No parse templates"
+            selectedTemplateIds={selectedGenerationSourceTemplateIds}
+            multiSelect
+            onTemplateToggle={toggleSourceTemplate}
+          />
         </div>
 
         <div

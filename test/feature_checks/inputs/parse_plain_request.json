@@ -1,0 +1,4 @@
+{
+  "data": "interface Lo0\n ip address 1.1.1.1/32\n!\n",
+  "template": "<group>\ninterface {{ interface }}\n ip address {{ ip }}/{{ mask }}\n</group>"
+}

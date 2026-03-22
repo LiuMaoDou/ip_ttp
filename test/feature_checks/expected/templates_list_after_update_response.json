@@ -1,0 +1,31 @@
+{
+  "templates": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "name": "interfaces-v2",
+      "description": "Updated loopback parser",
+      "sample_text": "interface Lo1\n ip address 2.2.2.2/32",
+      "variables": [
+        {
+          "id": "var-1",
+          "name": "interface",
+          "pattern": "WORD",
+          "indicators": [],
+          "syntaxMode": "variable",
+          "ignoreValue": null,
+          "headersColumns": null,
+          "startLine": 1,
+          "startColumn": 11,
+          "endLine": 1,
+          "endColumn": 14,
+          "originalText": "Lo0",
+          "colorIndex": 0
+        }
+      ],
+      "groups": [],
+      "generated_template": "<group name=\"interfaces\">\ninterface {{ interface }}\n ip address {{ ip }}\n</group>",
+      "created_at": 1000,
+      "updated_at": 2000
+    }
+  ]
+}

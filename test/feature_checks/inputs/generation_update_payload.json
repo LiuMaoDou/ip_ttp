@@ -1,0 +1,33 @@
+{
+  "name": "device-config-v2",
+  "description": "Updated generator",
+  "template_text": "hostname {{ data.interfaces.loopbacks.ip }}",
+  "source_templates": [
+    {
+      "template_id": "parse-template-1",
+      "template_name": "interfaces",
+      "template_alias": "interfaces"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "binding-1",
+      "start_line": 1,
+      "start_column": 1,
+      "end_line": 1,
+      "end_column": 10,
+      "original_text": "hostname",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "interfaces",
+        "template_alias": "interfaces",
+        "group_path": [
+          "loopbacks"
+        ],
+        "variable_name": "ip",
+        "selector": "interfaces.loopbacks.ip",
+        "expression": "{{ data.interfaces.loopbacks.ip }}"
+      }
+    }
+  ]
+}

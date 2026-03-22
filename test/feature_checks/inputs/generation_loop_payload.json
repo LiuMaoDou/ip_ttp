@@ -1,0 +1,107 @@
+{
+  "name": "vrf-config",
+  "description": "Repeated VRF rendering",
+  "template_text": "system-view\n#\nsysname SYSNAME\n#\nip vpn-instance VRF_NAME\n ipv4-family\n  route-distinguisher RD\n  vpn-target RT_EXPORT export-extcommunity\n  vpn-target RT_IMPORT import-extcommunity\n#\nreturn",
+  "source_templates": [
+    {
+      "template_id": "parse-template-1",
+      "template_name": "vrf",
+      "template_alias": "vrf"
+    }
+  ],
+  "bindings": [
+    {
+      "id": "binding-sysname",
+      "start_line": 3,
+      "start_column": 9,
+      "end_line": 3,
+      "end_column": 16,
+      "original_text": "SYSNAME",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "vrf",
+        "template_alias": "vrf",
+        "group_path": [],
+        "variable_name": "sysName",
+        "selector": "vrf.sysName",
+        "expression": "{{ data.vrf.sysName }}"
+      }
+    },
+    {
+      "id": "binding-vrf-name",
+      "start_line": 5,
+      "start_column": 17,
+      "end_line": 5,
+      "end_column": 25,
+      "original_text": "VRF_NAME",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "vrf",
+        "template_alias": "vrf",
+        "group_path": [
+          "vrfs"
+        ],
+        "variable_name": "vrf",
+        "selector": "vrf.vrfs.vrf",
+        "expression": "{{ data.vrf.vrfs.vrf }}"
+      }
+    },
+    {
+      "id": "binding-rd",
+      "start_line": 7,
+      "start_column": 23,
+      "end_line": 7,
+      "end_column": 25,
+      "original_text": "RD",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "vrf",
+        "template_alias": "vrf",
+        "group_path": [
+          "vrfs"
+        ],
+        "variable_name": "rd",
+        "selector": "vrf.vrfs.rd",
+        "expression": "{{ data.vrf.vrfs.rd }}"
+      }
+    },
+    {
+      "id": "binding-rt-export",
+      "start_line": 8,
+      "start_column": 14,
+      "end_line": 8,
+      "end_column": 23,
+      "original_text": "RT_EXPORT",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "vrf",
+        "template_alias": "vrf",
+        "group_path": [
+          "vrfs"
+        ],
+        "variable_name": "rt_ex",
+        "selector": "vrf.vrfs.rt_ex",
+        "expression": "{{ data.vrf.vrfs.rt_ex }}"
+      }
+    },
+    {
+      "id": "binding-rt-import",
+      "start_line": 9,
+      "start_column": 14,
+      "end_line": 9,
+      "end_column": 23,
+      "original_text": "RT_IMPORT",
+      "reference": {
+        "template_id": "parse-template-1",
+        "template_name": "vrf",
+        "template_alias": "vrf",
+        "group_path": [
+          "vrfs"
+        ],
+        "variable_name": "rt_in",
+        "selector": "vrf.vrfs.rt_in",
+        "expression": "{{ data.vrf.vrfs.rt_in }}"
+      }
+    }
+  ]
+}

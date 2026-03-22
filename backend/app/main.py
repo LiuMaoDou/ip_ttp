@@ -2,7 +2,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import generation, parse, templates
+from .routers import generation, parse, template_library, templates
 from .services.generation_service import GenerationTemplateService
 from .services.template_service import TemplateService
 
@@ -32,6 +32,7 @@ app.add_middleware(
 app.include_router(parse.router)
 app.include_router(templates.router)
 app.include_router(generation.router)
+app.include_router(template_library.router)
 
 
 @app.on_event("startup")

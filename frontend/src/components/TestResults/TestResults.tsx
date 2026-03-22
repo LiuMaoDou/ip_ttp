@@ -4,12 +4,16 @@ import { useStore, buildGenerationSourceTemplates, type FileParseResult, type Up
 import { parseText } from '../../services/api'
 import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
+import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import { formatFileSize, sanitizeFileNameSegment } from '../../utils'
 
 interface TemplateSource {
   id: string
   name: string
   template: string
+  vendor: string
+  categoryPath: string[]
+  description?: string
   source: 'current' | 'saved'
 }
 
@@ -88,6 +92,9 @@ export default function TestResults() {
     generatedTemplate,
     savedTemplates,
     isLoadingTemplates,
+    isLoadingTemplateDirectories,
+    vendors,
+    parseCategories,
     templateName,
     files,
     addFile,
@@ -114,38 +121,43 @@ export default function TestResults() {
   const bulkDownloadMenuRef = useRef<HTMLDivElement | null>(null)
   const resultDownloadMenuRef = useRef<HTMLDivElement | null>(null)
 
-  const templateOptions = useMemo<TemplateSource[]>(() => {
-    const savedOptions = savedTemplates
+  const savedTemplateOptions = useMemo<TemplateSource[]>(() => (
+    savedTemplates
       .filter((tpl) => tpl.generatedTemplate.trim())
       .map((tpl) => ({
         id: tpl.id,
         name: tpl.name,
         template: tpl.generatedTemplate,
+        vendor: tpl.vendor,
+        categoryPath: tpl.categoryPath,
+        description: tpl.description,
         source: 'saved' as const
       }))
+  ), [savedTemplates])
 
+  const currentTemplateOption = useMemo<TemplateSource | null>(() => {
     if (!generatedTemplate.trim()) {
-      return savedOptions
+      return null
     }
-
-    const currentMatchesSaved = savedOptions.some((option) => option.template === generatedTemplate)
+    const currentMatchesSaved = savedTemplateOptions.some((option) => option.template === generatedTemplate)
     if (currentMatchesSaved) {
-      return savedOptions
+      return null
     }
-
-    return [
-      {
-        id: 'current-template',
-        name: templateName || 'Current Template',
-        template: generatedTemplate,
-        source: 'current'
-      },
-      ...savedOptions
-    ]
-  }, [generatedTemplate, savedTemplates, templateName])
+    return {
+      id: 'current-template',
+      name: templateName || 'Current Template',
+      template: generatedTemplate,
+      vendor: 'Unassigned',
+      categoryPath: [],
+      source: 'current'
+    }
+  }, [generatedTemplate, savedTemplateOptions, templateName])
 
   useEffect(() => {
-    const optionIds = templateOptions.map((option) => option.id)
+    const optionIds = [
+      ...(currentTemplateOption ? [currentTemplateOption.id] : []),
+      ...savedTemplateOptions.map((option) => option.id)
+    ]
 
     setSelectedTemplateIds((prev) => {
       const kept = prev.filter((id) => optionIds.includes(id))
@@ -153,10 +165,10 @@ export default function TestResults() {
         return kept
       }
 
-      const preferredId = templateOptions.find((option) => option.source === 'current' || option.name === templateName)?.id
+      const preferredId = currentTemplateOption?.id || savedTemplateOptions.find((option) => option.name === templateName)?.id
       return preferredId ? [preferredId] : optionIds.slice(0, 1)
     })
-  }, [templateOptions, templateName])
+  }, [currentTemplateOption, savedTemplateOptions, templateName])
 
   useEffect(() => {
     const fileIds = files.map((file) => file.id)
@@ -210,8 +222,11 @@ export default function TestResults() {
   }, [showDownloadMenu, showResultDownloadMenu])
 
   const selectedTemplates = useMemo(
-    () => templateOptions.filter((option) => selectedTemplateIds.includes(option.id)),
-    [templateOptions, selectedTemplateIds]
+    () => {
+      const options = currentTemplateOption ? [currentTemplateOption, ...savedTemplateOptions] : savedTemplateOptions
+      return options.filter((option) => selectedTemplateIds.includes(option.id))
+    },
+    [currentTemplateOption, savedTemplateOptions, selectedTemplateIds]
   )
 
   const selectedFiles = useMemo(
@@ -556,7 +571,7 @@ export default function TestResults() {
         <div className="flex gap-2 items-center">
           <div className="hidden md:flex items-center gap-2 mr-4">
             <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-              Templates {selectedTemplates.length}/{templateOptions.length}
+              Templates {selectedTemplates.length}/{savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)}
             </span>
             <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
               Files {(selectedTestFileIds || []).length}/{files.length}
@@ -668,48 +683,43 @@ export default function TestResults() {
             <div className="flex items-center justify-between mb-2 px-1">
               <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Templates</h4>
               <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                {selectedTemplates.length}/{templateOptions.length}
+                {selectedTemplates.length}/{savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)}
               </span>
             </div>
-            {isLoadingTemplates ? (
-              <p className="text-sm px-1 py-3 text-center" style={{ color: 'var(--text-muted)' }}>
-                Loading templates...
-              </p>
-            ) : templateOptions.length === 0 ? (
-              <p className="text-sm px-1 py-3 text-center" style={{ color: 'var(--text-muted)' }}>
-                No templates
-              </p>
-            ) : (
-              <div className="space-y-1">
-                {templateOptions.map((template) => {
-                  const isSelected = selectedTemplateIds.includes(template.id)
-                  return (
-                    <div
-                      key={template.id}
-                      onClick={() => toggleTemplateSelection(template.id)}
-                      className="p-2 rounded-md cursor-pointer transition-colors"
-                      style={{
-                        backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
-                        border: isSelected ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid transparent'
-                      }}
-                      title={template.name}
-                    >
-                      <div className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={isSelected}
-                          readOnly
-                          className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{template.name}</p>
-                        </div>
-                      </div>
-                    </div>
-                  )
-                })}
+            {currentTemplateOption && (
+              <div
+                onClick={() => toggleTemplateSelection(currentTemplateOption.id)}
+                className="mb-2 p-2 rounded-md cursor-pointer transition-colors"
+                style={{
+                  backgroundColor: selectedTemplateIds.includes(currentTemplateOption.id) ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
+                  border: selectedTemplateIds.includes(currentTemplateOption.id) ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid transparent'
+                }}
+              >
+                <div className="flex items-start gap-2">
+                  <input
+                    type="checkbox"
+                    checked={selectedTemplateIds.includes(currentTemplateOption.id)}
+                    readOnly
+                    className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{currentTemplateOption.name}</p>
+                    <p className="text-xs truncate mt-1" style={{ color: 'var(--text-muted)' }}>Unsaved current template</p>
+                  </div>
+                </div>
               </div>
             )}
+            <TemplateDirectoryTree
+              title="Saved Templates"
+              vendors={vendors}
+              categories={parseCategories}
+              templates={savedTemplateOptions}
+              loading={isLoadingTemplates || isLoadingTemplateDirectories}
+              emptyText="No saved templates"
+              selectedTemplateIds={selectedTemplateIds}
+              multiSelect
+              onTemplateToggle={toggleTemplateSelection}
+            />
           </div>
 
           <div

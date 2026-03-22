@@ -46,6 +46,8 @@ export interface SavedTemplate {
   id: string
   name: string
   description: string
+  vendor: string
+  categoryPath: string[]
   sampleText: string
   variables: Array<Record<string, unknown>>
   groups: Array<Record<string, unknown>>
@@ -57,6 +59,8 @@ export interface SavedTemplate {
 export interface SavedTemplatePayload {
   name: string
   description: string
+  vendor: string
+  categoryPath: string[]
   sampleText: string
   variables: Array<Record<string, unknown>>
   groups: Array<Record<string, unknown>>
@@ -67,6 +71,8 @@ interface SavedTemplateResponse {
   id: string
   name: string
   description: string
+  vendor: string
+  category_path: string[]
   sample_text: string
   variables: Array<Record<string, unknown>>
   groups: Array<Record<string, unknown>>
@@ -109,6 +115,8 @@ export interface GenerationTemplate {
   id: string
   name: string
   description: string
+  vendor: string
+  categoryPath: string[]
   templateText: string
   sourceTemplates: GenerationSourceTemplate[]
   bindings: GenerationBinding[]
@@ -119,6 +127,8 @@ export interface GenerationTemplate {
 export interface GenerationTemplatePayload {
   name: string
   description: string
+  vendor: string
+  categoryPath: string[]
   templateText: string
   sourceTemplates: GenerationSourceTemplate[]
   bindings: GenerationBinding[]
@@ -154,6 +164,8 @@ interface GenerationTemplateResponse {
   id: string
   name: string
   description: string
+  vendor: string
+  category_path: string[]
   template_text: string
   source_templates: GenerationSourceTemplateResponse[]
   bindings: GenerationBindingResponse[]
@@ -163,6 +175,54 @@ interface GenerationTemplateResponse {
 
 interface GenerationTemplatesResponse {
   templates: GenerationTemplateResponse[]
+}
+
+export type TemplateKind = 'parse' | 'generation'
+
+export interface VendorRecord {
+  name: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface TemplateCategory {
+  id: string
+  vendor: string
+  name: string
+  parentId: string | null
+  path: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+interface VendorResponse {
+  name: string
+  created_at: number
+  updated_at: number
+}
+
+interface VendorsResponse {
+  vendors: VendorResponse[]
+}
+
+export interface TemplateCategoryPayload {
+  name: string
+  vendor: string
+  parentId?: string | null
+}
+
+interface TemplateCategoryResponse {
+  id: string
+  vendor: string
+  name: string
+  parent_id?: string | null
+  path: string[]
+  created_at: number
+  updated_at: number
+}
+
+interface CategoriesResponse {
+  categories: TemplateCategoryResponse[]
 }
 
 export interface GenerationRenderResult {
@@ -219,6 +279,8 @@ function mapSavedTemplate(template: SavedTemplateResponse): SavedTemplate {
     id: template.id,
     name: template.name,
     description: template.description,
+    vendor: template.vendor,
+    categoryPath: template.category_path || [],
     sampleText: template.sample_text,
     variables: template.variables,
     groups: template.groups,
@@ -232,6 +294,8 @@ function mapSavedTemplatePayload(template: SavedTemplatePayload): Record<string,
   return {
     name: template.name,
     description: template.description,
+    vendor: template.vendor,
+    category_path: template.categoryPath,
     sample_text: template.sampleText,
     variables: template.variables,
     groups: template.groups,
@@ -276,6 +340,8 @@ function mapGenerationTemplate(template: GenerationTemplateResponse): Generation
     id: template.id,
     name: template.name,
     description: template.description,
+    vendor: template.vendor,
+    categoryPath: template.category_path || [],
     templateText: template.template_text,
     sourceTemplates: template.source_templates.map(mapGenerationSourceTemplate),
     bindings: template.bindings.map(mapGenerationBinding),
@@ -288,6 +354,8 @@ function mapGenerationTemplatePayload(template: GenerationTemplatePayload): Reco
   return {
     name: template.name,
     description: template.description,
+    vendor: template.vendor,
+    category_path: template.categoryPath,
     template_text: template.templateText,
     source_templates: template.sourceTemplates.map((sourceTemplate) => ({
       template_id: sourceTemplate.templateId,
@@ -321,6 +389,26 @@ function mapGenerationRenderResult(result: GenerationRenderResultResponse): Gene
     generatedText: result.generated_text,
     error: result.error,
     errorType: result.error_type
+  }
+}
+
+function mapVendor(vendor: VendorResponse): VendorRecord {
+  return {
+    name: vendor.name,
+    createdAt: vendor.created_at,
+    updatedAt: vendor.updated_at
+  }
+}
+
+function mapCategory(category: TemplateCategoryResponse): TemplateCategory {
+  return {
+    id: category.id,
+    vendor: category.vendor,
+    name: category.name,
+    parentId: category.parent_id || null,
+    path: category.path || [],
+    createdAt: category.created_at,
+    updatedAt: category.updated_at
   }
 }
 
@@ -384,6 +472,52 @@ export async function updateTemplate(templateId: string, template: SavedTemplate
 
 export async function deleteTemplate(templateId: string): Promise<void> {
   await api.delete(`/templates/${templateId}`)
+}
+
+export async function getVendors(): Promise<VendorRecord[]> {
+  const response = await api.get<VendorsResponse>('/template-library/vendors')
+  return response.data.vendors.map(mapVendor)
+}
+
+export async function createVendor(name: string): Promise<VendorRecord> {
+  const response = await api.post<VendorResponse>('/template-library/vendors', { name })
+  return mapVendor(response.data)
+}
+
+export async function renameVendor(currentName: string, name: string): Promise<VendorRecord> {
+  const response = await api.put<VendorResponse>(`/template-library/vendors/${encodeURIComponent(currentName)}`, { name })
+  return mapVendor(response.data)
+}
+
+export async function deleteVendor(name: string): Promise<void> {
+  await api.delete(`/template-library/vendors/${encodeURIComponent(name)}`)
+}
+
+export async function getCategories(templateKind: TemplateKind): Promise<TemplateCategory[]> {
+  const response = await api.get<CategoriesResponse>(`/template-library/${templateKind}/categories`)
+  return response.data.categories.map(mapCategory)
+}
+
+export async function createCategory(templateKind: TemplateKind, payload: TemplateCategoryPayload): Promise<TemplateCategory> {
+  const response = await api.post<TemplateCategoryResponse>(`/template-library/${templateKind}/categories`, {
+    name: payload.name,
+    vendor: payload.vendor,
+    parent_id: payload.parentId ?? null
+  })
+  return mapCategory(response.data)
+}
+
+export async function updateCategory(templateKind: TemplateKind, categoryId: string, payload: TemplateCategoryPayload): Promise<TemplateCategory> {
+  const response = await api.put<TemplateCategoryResponse>(`/template-library/${templateKind}/categories/${categoryId}`, {
+    name: payload.name,
+    vendor: payload.vendor,
+    parent_id: payload.parentId ?? null
+  })
+  return mapCategory(response.data)
+}
+
+export async function deleteCategory(templateKind: TemplateKind, categoryId: string): Promise<void> {
+  await api.delete(`/template-library/${templateKind}/categories/${categoryId}`)
 }
 
 export async function getGenerationTemplates(): Promise<GenerationTemplate[]> {

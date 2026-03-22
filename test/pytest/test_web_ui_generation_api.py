@@ -8,6 +8,7 @@ sys.path.insert(0, "../..")
 
 from backend.app.main import app
 from backend.app.services import generation_service
+from backend.app.services.template_directory_service import DEFAULT_VENDOR
 from backend.app.services.generation_service import ConfigGenerationService, GenerationTemplateService
 
 SOURCE_TEMPLATES = [
@@ -65,6 +66,8 @@ def make_generation_payload(name="device-config"):
     return {
         "name": name,
         "description": "Generate device config",
+        "vendor": "Cisco",
+        "category_path": ["WAN", "BGP"],
         "template_text": "interface Lo0\n ip address {{ data.interfaces.loopbacks.ip }}\nneighbor {{ data.neighbors.peer }}",
         "source_templates": SOURCE_TEMPLATES,
         "bindings": BINDINGS,
@@ -88,10 +91,14 @@ def test_generation_template_service_crud_and_json_roundtrip(tmp_path, monkeypat
         template_text="interface Lo0\n ip address {{ data.interfaces.loopbacks.ip }}",
         source_templates=SOURCE_TEMPLATES,
         bindings=BINDINGS,
+        vendor="Cisco",
+        category_path=["WAN", "BGP"],
         db_path=db_path,
     )
 
     assert created["name"] == "device-config"
+    assert created["vendor"] == "Cisco"
+    assert created["category_path"] == ["WAN", "BGP"]
     assert created["source_templates"] == SOURCE_TEMPLATES
     assert created["bindings"] == BINDINGS
     assert created["created_at"] == 1000
@@ -104,11 +111,15 @@ def test_generation_template_service_crud_and_json_roundtrip(tmp_path, monkeypat
         template_text="hostname {{ data.system.hostname }}",
         source_templates=SOURCE_TEMPLATES[:1],
         bindings=BINDINGS[:1],
+        vendor="Cisco",
+        category_path=["Access"],
         db_path=db_path,
     )
 
     assert updated is not None
     assert updated["name"] == "device-config-v2"
+    assert updated["vendor"] == "Cisco"
+    assert updated["category_path"] == ["Access"]
     assert updated["source_templates"] == SOURCE_TEMPLATES[:1]
     assert updated["bindings"] == BINDINGS[:1]
     assert updated["created_at"] == 1000
@@ -127,7 +138,7 @@ def test_config_generation_service_renders_namespaced_payload():
         [
             {
                 "file_name": "device.json",
-                "content": '{"templates":{"interfaces":{"loopbacks":{"ip":"1.1.1.1/32"}},"neighbors":{"peer":"10.0.0.1"}}}'
+                "payload": {"templates": {"interfaces": {"loopbacks": {"ip": "1.1.1.1/32"}}, "neighbors": {"peer": "10.0.0.1"}}},
             }
         ]
     )
@@ -168,7 +179,7 @@ def test_config_generation_service_applies_bindings_before_rendering():
         [
             {
                 "file_name": "device.json",
-                "content": '{"templates":{"interfaces":{"loopbacks":{"ip":"1.1.1.1/32"}},"neighbors":{"peer":"10.0.0.1"}}}'
+                "payload": {"templates": {"interfaces": {"loopbacks": {"ip": "1.1.1.1/32"}}, "neighbors": {"peer": "10.0.0.1"}}},
             }
         ]
     )
@@ -210,7 +221,7 @@ def test_config_generation_service_reports_overlapping_bindings():
         [
             {
                 "file_name": "device.json",
-                "content": '{"templates":{"interfaces":{"loopbacks":{"ip":"1.1.1.1/32"}},"neighbors":{"peer":"10.0.0.1"}}}'
+                "payload": {"templates": {"interfaces": {"loopbacks": {"ip": "1.1.1.1/32"}}, "neighbors": {"peer": "10.0.0.1"}}},
             }
         ]
     )
@@ -235,7 +246,7 @@ def test_config_generation_service_reports_missing_template_alias():
         [
             {
                 "file_name": "missing.json",
-                "content": '{"templates":{"interfaces":{"loopbacks":{"ip":"1.1.1.1/32"}}}}'
+                "payload": {"templates": {"interfaces": {"loopbacks": {"ip": "1.1.1.1/32"}}}},
             }
         ]
     )
@@ -347,7 +358,17 @@ def test_config_generation_service_renders_repeated_group_bindings_with_loops():
         [
             {
                 "file_name": "vrf.json",
-                "content": '{"templates":{"vrf":{"sysName":"PE2","vrfs":[{"vrf":"VRF_01","rd":"65000:1","rt_ex":"65000:1","rt_in":"65000:1"},{"vrf":"VRF_02","rd":"65000:2","rt_ex":"65000:2","rt_in":"65000:2"}]}}}'
+                "payload": {
+                    "templates": {
+                        "vrf": {
+                            "sysName": "PE2",
+                            "vrfs": [
+                                {"vrf": "VRF_01", "rd": "65000:1", "rt_ex": "65000:1", "rt_in": "65000:1"},
+                                {"vrf": "VRF_02", "rd": "65000:2", "rt_ex": "65000:2", "rt_in": "65000:2"},
+                            ],
+                        }
+                    }
+                },
             }
         ]
     )
@@ -463,7 +484,17 @@ def test_config_generation_service_keeps_indented_block_and_separator_inside_rep
         [
             {
                 "file_name": "vrf.json",
-                "content": '{"templates":{"vrf":{"sysName":"PE2","vrfs":[{"vrf":"VRF_01","rd":"65000:1","rt_ex":"65000:1","rt_in":"65000:1"},{"vrf":"VRF_02","rd":"65000:2","rt_ex":"65000:2","rt_in":"65000:2"}]}}}'
+                "payload": {
+                    "templates": {
+                        "vrf": {
+                            "sysName": "PE2",
+                            "vrfs": [
+                                {"vrf": "VRF_01", "rd": "65000:1", "rt_ex": "65000:1", "rt_in": "65000:1"},
+                                {"vrf": "VRF_02", "rd": "65000:2", "rt_ex": "65000:2", "rt_in": "65000:2"},
+                            ],
+                        }
+                    }
+                },
             }
         ]
     )
@@ -494,6 +525,8 @@ def test_generation_api_crud_and_render_flow(tmp_path, monkeypatch):
             assert create_response.status_code == 201
             created = create_response.json()
             assert created["name"] == "device-config"
+            assert created["vendor"] == "Cisco"
+            assert created["category_path"] == ["WAN", "BGP"]
             assert created["source_templates"] == SOURCE_TEMPLATES
             assert created["bindings"] == BINDINGS
 
@@ -587,6 +620,7 @@ def test_generation_api_prefers_draft_payload_over_saved_template(tmp_path, monk
             create_response = await client.post("/api/generation/templates", json=make_generation_payload())
             assert create_response.status_code == 201
             created = create_response.json()
+            assert created["vendor"] == "Cisco"
 
             draft_payload = make_generation_payload(name="draft-config")
             draft_payload["template_text"] = "hostname {{ data.interfaces.loopbacks.ip }}"
@@ -613,6 +647,31 @@ def test_generation_api_prefers_draft_payload_over_saved_template(tmp_path, monk
 
             assert render_response.status_code == 200
             assert render_response.json()["results"][0]["generated_text"] == "hostname 1.1.1.1/32"
+
+    asyncio.run(run_test())
+
+
+def test_generation_directory_rename_updates_saved_template_vendor(tmp_path, monkeypatch):
+    db_path = tmp_path / "ttp_web_generation_directories.db"
+    monkeypatch.setenv("TTP_WEB_DB_PATH", str(db_path))
+    timestamps = iter([1000, 2000, 3000, 4000])
+    monkeypatch.setattr(generation_service, "_current_timestamp", lambda: next(timestamps))
+
+    async def run_test():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create_response = await client.post("/api/generation/templates", json=make_generation_payload())
+            assert create_response.status_code == 201
+
+            rename_vendor_response = await client.put(
+                "/api/template-library/vendors/Cisco",
+                json={"name": "Juniper"},
+            )
+            assert rename_vendor_response.status_code == 200
+
+            list_response = await client.get("/api/generation/templates")
+            assert list_response.status_code == 200
+            assert list_response.json()["templates"][0]["vendor"] == "Juniper"
 
     asyncio.run(run_test())
 

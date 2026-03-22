@@ -3,6 +3,7 @@ import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor, IRange, IDisposable } from 'monaco-editor'
 import { useStore, getVariableColor, type Variable, type VariableSyntaxMode } from '../../store/useStore'
 import { getParameterPlaceholderDecorations } from '../../utils'
+import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import VariableModal from './VariableModal'
 import GroupModal from './GroupModal'
 import VariableList from './VariableList'
@@ -161,10 +162,10 @@ export default function TemplateBuilder() {
   const [groupSelection, setGroupSelection] = useState<GroupSelection | null>(null)
   const [showTemplateNameModal, setShowTemplateNameModal] = useState(false)
   const [templateNameInput, setTemplateNameInput] = useState('')
-  const [templateDescInput, setTemplateDescInput] = useState('')
+  const [templateVendorInput, setTemplateVendorInput] = useState('Unassigned')
+  const [templateCategoryInput, setTemplateCategoryInput] = useState('')
   const [isEditorReady, setIsEditorReady] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
-  const [isDeletingTemplateId, setIsDeletingTemplateId] = useState<string | null>(null)
   const pendingSyncFrameRef = useRef<number | null>(null)
 
   const {
@@ -187,8 +188,13 @@ export default function TemplateBuilder() {
     loadTemplate,
     deleteTemplate,
     templateName,
+    currentTemplateVendor,
+    currentTemplateCategoryPath,
     selectedSavedTemplateId,
     isLoadingTemplates,
+    isLoadingTemplateDirectories,
+    vendors,
+    parseCategories,
     theme
   } = useStore()
 
@@ -882,38 +888,35 @@ export default function TemplateBuilder() {
     }
 
     setTemplateNameInput(templateName || selectedSavedTemplate?.name || '')
-    setTemplateDescInput(selectedSavedTemplate?.description || '')
+    setTemplateVendorInput(selectedSavedTemplate?.vendor || currentTemplateVendor || 'Unassigned')
+    setTemplateCategoryInput((selectedSavedTemplate?.categoryPath || currentTemplateCategoryPath || []).join('/'))
     setShowTemplateNameModal(true)
-  }, [variables, groups, templateName, selectedSavedTemplate])
+  }, [variables, groups, templateName, selectedSavedTemplate, currentTemplateVendor, currentTemplateCategoryPath])
 
   const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
+    const categoryPath = templateCategoryInput.split('/').map((segment) => segment.trim()).filter(Boolean)
     setTemplateName(name)
     setIsSavingTemplate(true)
     try {
-      await saveTemplate(name, templateDescInput)
+      await saveTemplate(name, '', templateVendorInput, categoryPath)
       setShowTemplateNameModal(false)
       setTemplateNameInput('')
-      setTemplateDescInput('')
+      setTemplateVendorInput('Unassigned')
+      setTemplateCategoryInput('')
     } finally {
       setIsSavingTemplate(false)
     }
-  }, [templateNameInput, templateDescInput, setTemplateName, saveTemplate])
+  }, [templateNameInput, templateVendorInput, templateCategoryInput, setTemplateName, saveTemplate])
 
   const handleLoadTemplate = useCallback(async (id: string) => {
     suppressTrackingSyncRef.current = true
     await loadTemplate(id)
   }, [loadTemplate])
 
-  const handleDeleteTemplate = useCallback(async (id: string, e: React.MouseEvent) => {
-    e.stopPropagation()
+  const handleDeleteTemplate = useCallback(async (id: string) => {
     if (confirm('Delete this template?')) {
-      setIsDeletingTemplateId(id)
-      try {
-        await deleteTemplate(id)
-      } finally {
-        setIsDeletingTemplateId(null)
-      }
+      await deleteTemplate(id)
     }
   }, [deleteTemplate])
 
@@ -951,64 +954,25 @@ export default function TemplateBuilder() {
       <div className="flex-1 flex min-h-0">
         {/* Left: Saved Templates Sidebar */}
         <div className="w-56 border-r overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div className="p-2">
-            <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Template Management ({savedTemplates.length})</h3>
-            {isLoadingTemplates ? (
-              <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>Loading templates...</p>
-            ) : savedTemplates.length === 0 ? (
-              <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>No saved templates</p>
-            ) : (
-              <div className="space-y-1">
-                {savedTemplates.map((tpl) => {
-                  const isSelected = selectedSavedTemplateId === tpl.id
-                  const isDeleting = isDeletingTemplateId === tpl.id
-
-                  return (
-                    <div
-                      key={tpl.id}
-                      onClick={() => { void handleLoadTemplate(tpl.id) }}
-                      className="p-2 rounded-md cursor-pointer group transition-colors"
-                      style={{
-                        backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-                        border: isSelected ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent',
-                        opacity: isDeleting ? 0.6 : 1
-                      }}
-                      onMouseEnter={(e) => {
-                        if (!isSelected) {
-                          e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)'
-                        }
-                      }}
-                      onMouseLeave={(e) => {
-                        if (!isSelected) {
-                          e.currentTarget.style.backgroundColor = 'transparent'
-                        }
-                      }}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{tpl.name}</p>
-                          <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{tpl.description || 'No description'}</p>
-                          <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                            {tpl.variables.length} variables{(tpl.groups?.length || 0) > 0 && `, ${tpl.groups?.length} groups`}
-                          </p>
-                        </div>
-                        <button
-                          onClick={(e) => { void handleDeleteTemplate(tpl.id, e) }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity ml-1"
-                          style={{ color: 'var(--text-muted)' }}
-                          disabled={isDeleting}
-                        >
-                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </div>
+          <TemplateDirectoryTree
+            title="Template Management"
+            vendors={vendors}
+            categories={parseCategories}
+            templates={savedTemplates}
+            loading={isLoadingTemplates || isLoadingTemplateDirectories}
+            emptyText="No saved templates"
+            activeTemplateId={selectedSavedTemplateId}
+            manageDirectories
+            onTemplateClick={(templateId) => { void handleLoadTemplate(templateId) }}
+            onMoveTemplate={(templateId, vendor, categoryPath) => useStore.getState().moveTemplate(templateId, vendor, categoryPath)}
+            onDeleteTemplate={(templateId) => { void handleDeleteTemplate(templateId) }}
+            onCreateVendor={(name) => useStore.getState().createVendor(name)}
+            onRenameVendor={(currentName, nextName) => useStore.getState().renameVendor(currentName, nextName)}
+            onDeleteVendor={(name) => useStore.getState().deleteVendor(name)}
+            onCreateCategory={(vendor, name, parentId) => useStore.getState().createCategory('parse', vendor, name, parentId)}
+            onRenameCategory={(categoryId, vendor, name, parentId) => useStore.getState().updateCategory('parse', categoryId, vendor, name, parentId)}
+            onDeleteCategory={(categoryId) => useStore.getState().deleteCategory('parse', categoryId)}
+          />
         </div>
 
         {/* Center: Sample Input + Generated Template (side by side) */}
@@ -1137,11 +1101,26 @@ export default function TemplateBuilder() {
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               autoFocus
             />
-            <textarea
-              value={templateDescInput}
-              onChange={(e) => setTemplateDescInput(e.target.value)}
-              placeholder="Description (optional)"
-              className="w-full px-3 py-2 border rounded-md mb-4 h-20 resize-none focus:outline-none focus:ring-2"
+            <input
+              type="text"
+              list="template-vendors"
+              value={templateVendorInput}
+              onChange={(e) => setTemplateVendorInput(e.target.value)}
+              placeholder="Vendor"
+              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
+              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+            />
+            <datalist id="template-vendors">
+              {vendors.map((vendor) => (
+                <option key={vendor.name} value={vendor.name} />
+              ))}
+            </datalist>
+            <input
+              type="text"
+              value={templateCategoryInput}
+              onChange={(e) => setTemplateCategoryInput(e.target.value)}
+              placeholder="Folder path (e.g. Core/Interfaces)"
+              className="w-full px-3 py-2 border rounded-md mb-4 focus:outline-none focus:ring-2"
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
             />
             <div className="flex justify-end gap-2">

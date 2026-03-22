@@ -1,0 +1,5 @@
+{
+  "data": "interface Lo0\n ip address 1.1.1.1/32\n",
+  "template": "interface {{ interface }}\n ip address {{ ip }}/{{ mask }}",
+  "name": "interfaces"
+}

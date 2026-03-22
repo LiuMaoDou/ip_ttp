@@ -17,6 +17,8 @@ class GenerationTemplatePayload(BaseModel):
 
     name: str
     description: str = ""
+    vendor: str = "Unassigned"
+    category_path: list[str] = Field(default_factory=list)
     template_text: str
     source_templates: list[dict[str, Any]] = Field(default_factory=list)
     bindings: list[dict[str, Any]] = Field(default_factory=list)

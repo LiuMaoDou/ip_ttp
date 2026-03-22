@@ -13,6 +13,7 @@ export default function App() {
   const {
     setPatterns,
     fetchSavedTemplates,
+    fetchTemplateDirectories,
     fetchGenerationTemplates,
     theme,
     toggleTheme
@@ -27,6 +28,7 @@ export default function App() {
       try {
         const [patterns] = await Promise.all([
           getPatterns(),
+          fetchTemplateDirectories(),
           fetchSavedTemplates(),
           fetchGenerationTemplates()
         ])
@@ -38,7 +40,7 @@ export default function App() {
       }
     }
     void loadAppData()
-  }, [fetchGenerationTemplates, fetchSavedTemplates, setPatterns])
+  }, [fetchGenerationTemplates, fetchSavedTemplates, fetchTemplateDirectories, setPatterns])
 
   const tabs: { id: Tab; label: string; icon: JSX.Element }[] = [
     {

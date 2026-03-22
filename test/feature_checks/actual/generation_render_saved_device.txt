@@ -1,0 +1,3 @@
+interface Lo0
+ ip address 1.1.1.1/32
+neighbor 10.0.0.1

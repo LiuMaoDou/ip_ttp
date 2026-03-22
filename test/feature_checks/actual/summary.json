@@ -1,0 +1,69 @@
+{
+  "status": "passed",
+  "features": [
+    {
+      "feature": "patterns",
+      "status": "passed"
+    },
+    {
+      "feature": "parse_plain",
+      "status": "passed"
+    },
+    {
+      "feature": "parse_named",
+      "status": "passed"
+    },
+    {
+      "feature": "parse_file",
+      "status": "passed"
+    },
+    {
+      "feature": "templates_create",
+      "status": "passed"
+    },
+    {
+      "feature": "templates_update",
+      "status": "passed"
+    },
+    {
+      "feature": "templates_list",
+      "status": "passed"
+    },
+    {
+      "feature": "templates_delete",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_templates_create",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_render_saved",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_templates_update",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_templates_list",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_render_draft",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_render_loop",
+      "status": "passed"
+    },
+    {
+      "feature": "generation_templates_delete",
+      "status": "passed"
+    },
+    {
+      "feature": "frontend_build",
+      "status": "passed"
+    }
+  ]
+}

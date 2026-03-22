@@ -1,13 +1,21 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import {
+  createCategory as createCategoryRequest,
   createGenerationTemplate,
   createTemplate,
+  createVendor as createVendorRequest,
+  deleteCategory as deleteCategoryRequest,
   deleteGenerationTemplate as deleteGenerationTemplateRequest,
   deleteTemplate as deleteTemplateRequest,
+  deleteVendor as deleteVendorRequest,
+  getCategories,
   getGenerationTemplates,
   getTemplates,
+  getVendors,
   renderGenerationFiles,
+  renameVendor as renameVendorRequest,
+  updateCategory as updateCategoryRequest,
   updateGenerationTemplate,
   updateTemplate
 } from '../services/api'
@@ -19,7 +27,10 @@ import type {
   GenerationTemplatePayload,
   ParseResult,
   Pattern,
-  SavedTemplate
+  SavedTemplate,
+  TemplateCategory,
+  TemplateKind,
+  VendorRecord
 } from '../services/api'
 
 export type {
@@ -30,7 +41,10 @@ export type {
   GenerationTemplatePayload,
   ParseResult,
   Pattern,
-  SavedTemplate
+  SavedTemplate,
+  TemplateCategory,
+  TemplateKind,
+  VendorRecord
 } from '../services/api'
 
 export type VariableSyntaxMode = 'variable' | 'ignore' | 'headers' | 'end'
@@ -114,10 +128,16 @@ interface AppState {
   groups: Group[]
   generatedTemplate: string
   templateName: string
+  currentTemplateVendor: string
+  currentTemplateCategoryPath: string[]
   selectedSavedTemplateId: string | null
 
   savedTemplates: SavedTemplate[]
+  vendors: VendorRecord[]
+  parseCategories: TemplateCategory[]
+  generationCategories: TemplateCategory[]
   isLoadingTemplates: boolean
+  isLoadingTemplateDirectories: boolean
 
   files: UploadedFile[]
   selectedFileId: string | null
@@ -130,6 +150,8 @@ interface AppState {
   isParsing: boolean
 
   generationTemplateText: string
+  currentGenerationTemplateVendor: string
+  currentGenerationTemplateCategoryPath: string[]
   selectedGenerationTemplateId: string | null
   selectedGenerationResultIndex: number
   generationBindings: GenerationBinding[]
@@ -155,9 +177,18 @@ interface AppState {
   generateTemplate: () => string
   clearVariables: () => void
   newTemplate: () => void
+  setCurrentTemplateDirectory: (vendor: string, categoryPath: string[]) => void
 
   fetchSavedTemplates: () => Promise<void>
-  saveTemplate: (name: string, description: string) => Promise<void>
+  fetchTemplateDirectories: () => Promise<void>
+  createVendor: (name: string) => Promise<void>
+  renameVendor: (currentName: string, nextName: string) => Promise<void>
+  deleteVendor: (name: string) => Promise<void>
+  createCategory: (templateKind: TemplateKind, vendor: string, name: string, parentId?: string | null) => Promise<void>
+  updateCategory: (templateKind: TemplateKind, categoryId: string, vendor: string, name: string, parentId?: string | null) => Promise<void>
+  deleteCategory: (templateKind: TemplateKind, categoryId: string) => Promise<void>
+  saveTemplate: (name: string, description: string, vendor: string, categoryPath: string[]) => Promise<void>
+  moveTemplate: (id: string, vendor: string, categoryPath: string[]) => Promise<void>
   loadTemplate: (id: string) => Promise<void>
   deleteTemplate: (id: string) => Promise<void>
 
@@ -182,8 +213,10 @@ interface AppState {
   setSelectedGenerationResultIndex: (index: number) => void
   setSelectedGenerationTemplateId: (id: string | null) => void
   setSelectedGenerationSourceTemplateIds: (ids: string[] | ((current: string[]) => string[])) => void
+  setCurrentGenerationTemplateDirectory: (vendor: string, categoryPath: string[]) => void
   fetchGenerationTemplates: () => Promise<void>
-  saveGenerationTemplate: (name: string, description: string, sourceTemplates: GenerationSourceTemplate[]) => Promise<void>
+  saveGenerationTemplate: (name: string, description: string, vendor: string, categoryPath: string[], sourceTemplates: GenerationSourceTemplate[]) => Promise<void>
+  moveGenerationTemplate: (id: string, vendor: string, categoryPath: string[]) => Promise<void>
   loadGenerationTemplate: (id: string) => Promise<void>
   deleteGenerationTemplate: (id: string) => Promise<void>
   runGeneration: (options?: { name?: string; description?: string }) => Promise<void>
@@ -198,6 +231,7 @@ const VARIABLE_COLORS = [
   '#3b82f6', '#22c55e', '#a855f7', '#f59e0b', '#ef4444', '#06b6d4',
   '#ec4899', '#84cc16', '#6366f1', '#14b8a6', '#f97316', '#8b5cf6'
 ]
+const DEFAULT_VENDOR = 'Unassigned'
 
 function createVariableId() {
   return `var-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -207,8 +241,18 @@ function createGroupId() {
   return `grp-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
 }
 
-function toSavedTemplatePayload(state: Pick<AppState, 'sampleText' | 'variables' | 'groups' | 'generatedTemplate'>) {
+function normalizeCategoryPath(categoryPath: string[]): string[] {
+  return categoryPath.map((segment) => segment.trim()).filter(Boolean)
+}
+
+function toSavedTemplatePayload(
+  state: Pick<AppState, 'sampleText' | 'variables' | 'groups' | 'generatedTemplate'>,
+  vendor: string,
+  categoryPath: string[]
+) {
   return {
+    vendor: vendor.trim() || DEFAULT_VENDOR,
+    categoryPath: normalizeCategoryPath(categoryPath),
     sampleText: state.sampleText,
     variables: state.variables as unknown as Array<Record<string, unknown>>,
     groups: state.groups as unknown as Array<Record<string, unknown>>,
@@ -216,10 +260,19 @@ function toSavedTemplatePayload(state: Pick<AppState, 'sampleText' | 'variables'
   }
 }
 
-function toGenerationTemplatePayload(state: Pick<AppState, 'generationTemplateText' | 'generationBindings'>, name: string, description: string, sourceTemplates: GenerationSourceTemplate[]): GenerationTemplatePayload {
+function toGenerationTemplatePayload(
+  state: Pick<AppState, 'generationTemplateText' | 'generationBindings'>,
+  name: string,
+  description: string,
+  vendor: string,
+  categoryPath: string[],
+  sourceTemplates: GenerationSourceTemplate[]
+): GenerationTemplatePayload {
   return {
     name,
     description,
+    vendor: vendor.trim() || DEFAULT_VENDOR,
+    categoryPath: normalizeCategoryPath(categoryPath),
     templateText: state.generationTemplateText,
     sourceTemplates,
     bindings: state.generationBindings
@@ -341,9 +394,15 @@ export const useStore = create<AppState>()(
       groups: [],
       generatedTemplate: '',
       templateName: '',
+      currentTemplateVendor: DEFAULT_VENDOR,
+      currentTemplateCategoryPath: [],
       selectedSavedTemplateId: null,
       savedTemplates: [],
+      vendors: [],
+      parseCategories: [],
+      generationCategories: [],
       isLoadingTemplates: false,
+      isLoadingTemplateDirectories: false,
       files: [],
       selectedFileId: null,
       inputText: '',
@@ -353,6 +412,8 @@ export const useStore = create<AppState>()(
       selectedTestFileIds: null,
       isParsing: false,
       generationTemplateText: '',
+      currentGenerationTemplateVendor: DEFAULT_VENDOR,
+      currentGenerationTemplateCategoryPath: [],
       selectedGenerationTemplateId: null,
       selectedGenerationResultIndex: 0,
       generationBindings: [],
@@ -660,6 +721,8 @@ export const useStore = create<AppState>()(
         groups: [],
         generatedTemplate: '',
         templateName: '',
+        currentTemplateVendor: DEFAULT_VENDOR,
+        currentTemplateCategoryPath: [],
         selectedSavedTemplateId: null
       }),
 
@@ -669,20 +732,87 @@ export const useStore = create<AppState>()(
         groups: [],
         generatedTemplate: '',
         templateName: '',
+        currentTemplateVendor: DEFAULT_VENDOR,
+        currentTemplateCategoryPath: [],
         selectedSavedTemplateId: null
+      }),
+
+      setCurrentTemplateDirectory: (vendor, categoryPath) => set({
+        currentTemplateVendor: vendor.trim() || DEFAULT_VENDOR,
+        currentTemplateCategoryPath: normalizeCategoryPath(categoryPath)
       }),
 
       fetchSavedTemplates: async () => {
         set({ isLoadingTemplates: true })
         try {
           const savedTemplates = await getTemplates()
-          set({ savedTemplates })
+          const current = get()
+          const selectedTemplate = current.selectedSavedTemplateId
+            ? savedTemplates.find((template) => template.id === current.selectedSavedTemplateId)
+            : null
+          set({
+            savedTemplates,
+            currentTemplateVendor: selectedTemplate?.vendor || current.currentTemplateVendor,
+            currentTemplateCategoryPath: selectedTemplate?.categoryPath || current.currentTemplateCategoryPath
+          })
         } finally {
           set({ isLoadingTemplates: false })
         }
       },
 
-      saveTemplate: async (name, description) => {
+      fetchTemplateDirectories: async () => {
+        set({ isLoadingTemplateDirectories: true })
+        try {
+          const [vendors, parseCategories, generationCategories] = await Promise.all([
+            getVendors(),
+            getCategories('parse'),
+            getCategories('generation')
+          ])
+          set({ vendors, parseCategories, generationCategories })
+        } finally {
+          set({ isLoadingTemplateDirectories: false })
+        }
+      },
+
+      createVendor: async (name) => {
+        await createVendorRequest(name)
+        await get().fetchTemplateDirectories()
+      },
+
+      renameVendor: async (currentName, nextName) => {
+        await renameVendorRequest(currentName, nextName)
+        await Promise.all([
+          get().fetchTemplateDirectories(),
+          get().fetchSavedTemplates(),
+          get().fetchGenerationTemplates()
+        ])
+      },
+
+      deleteVendor: async (name) => {
+        await deleteVendorRequest(name)
+        await get().fetchTemplateDirectories()
+      },
+
+      createCategory: async (templateKind, vendor, name, parentId) => {
+        await createCategoryRequest(templateKind, { vendor, name, parentId })
+        await get().fetchTemplateDirectories()
+      },
+
+      updateCategory: async (templateKind, categoryId, vendor, name, parentId) => {
+        await updateCategoryRequest(templateKind, categoryId, { vendor, name, parentId })
+        await Promise.all([
+          get().fetchTemplateDirectories(),
+          templateKind === 'parse' ? get().fetchSavedTemplates() : Promise.resolve(),
+          templateKind === 'generation' ? get().fetchGenerationTemplates() : Promise.resolve()
+        ])
+      },
+
+      deleteCategory: async (templateKind, categoryId) => {
+        await deleteCategoryRequest(templateKind, categoryId)
+        await get().fetchTemplateDirectories()
+      },
+
+      saveTemplate: async (name, description, vendor, categoryPath) => {
         set({ templateName: name })
         const generatedTemplate = get().generateTemplate()
         const state = get()
@@ -697,7 +827,7 @@ export const useStore = create<AppState>()(
             variables: state.variables,
             groups: state.groups,
             generatedTemplate
-          })
+          }, vendor, categoryPath)
         }
 
         let savedTemplateId = state.selectedSavedTemplateId
@@ -711,11 +841,38 @@ export const useStore = create<AppState>()(
         }
 
         await get().fetchSavedTemplates()
+        await get().fetchTemplateDirectories()
 
         set({
           templateName: name,
+          currentTemplateVendor: vendor.trim() || DEFAULT_VENDOR,
+          currentTemplateCategoryPath: normalizeCategoryPath(categoryPath),
           selectedSavedTemplateId: savedTemplateId
         })
+      },
+
+      moveTemplate: async (id, vendor, categoryPath) => {
+        const state = get()
+        const template = state.savedTemplates.find((item) => item.id === id)
+        if (!template) {
+          return
+        }
+
+        await updateTemplate(id, {
+          name: template.name,
+          description: template.description,
+          vendor: vendor.trim() || DEFAULT_VENDOR,
+          categoryPath: normalizeCategoryPath(categoryPath),
+          sampleText: template.sampleText,
+          variables: template.variables,
+          groups: template.groups,
+          generatedTemplate: template.generatedTemplate
+        })
+
+        await Promise.all([
+          get().fetchSavedTemplates(),
+          get().fetchTemplateDirectories()
+        ])
       },
 
       loadTemplate: async (id) => {
@@ -731,6 +888,8 @@ export const useStore = create<AppState>()(
           groups: (template.groups || []) as unknown as Group[],
           generatedTemplate: template.generatedTemplate,
           templateName: template.name,
+          currentTemplateVendor: template.vendor || DEFAULT_VENDOR,
+          currentTemplateCategoryPath: template.categoryPath || [],
           selectedSavedTemplateId: template.id
         })
       },
@@ -741,7 +900,11 @@ export const useStore = create<AppState>()(
         await get().fetchSavedTemplates()
 
         if (wasSelected) {
-          set({ selectedSavedTemplateId: null })
+          set({
+            selectedSavedTemplateId: null,
+            currentTemplateVendor: DEFAULT_VENDOR,
+            currentTemplateCategoryPath: []
+          })
         }
       },
 
@@ -805,18 +968,30 @@ export const useStore = create<AppState>()(
       setSelectedGenerationSourceTemplateIds: (ids) => set((state) => ({
         selectedGenerationSourceTemplateIds: typeof ids === 'function' ? ids(state.selectedGenerationSourceTemplateIds) : ids
       })),
+      setCurrentGenerationTemplateDirectory: (vendor, categoryPath) => set({
+        currentGenerationTemplateVendor: vendor.trim() || DEFAULT_VENDOR,
+        currentGenerationTemplateCategoryPath: normalizeCategoryPath(categoryPath)
+      }),
       fetchGenerationTemplates: async () => {
         set({ isLoadingGenerationTemplates: true })
         try {
           const generationTemplates = await getGenerationTemplates()
-          set({ generationTemplates })
+          const current = get()
+          const selectedTemplate = current.selectedGenerationTemplateId
+            ? generationTemplates.find((template) => template.id === current.selectedGenerationTemplateId)
+            : null
+          set({
+            generationTemplates,
+            currentGenerationTemplateVendor: selectedTemplate?.vendor || current.currentGenerationTemplateVendor,
+            currentGenerationTemplateCategoryPath: selectedTemplate?.categoryPath || current.currentGenerationTemplateCategoryPath
+          })
         } finally {
           set({ isLoadingGenerationTemplates: false })
         }
       },
-      saveGenerationTemplate: async (name, description, sourceTemplates) => {
+      saveGenerationTemplate: async (name, description, vendor, categoryPath, sourceTemplates) => {
         const state = get()
-        const payload = toGenerationTemplatePayload(state, name, description, sourceTemplates)
+        const payload = toGenerationTemplatePayload(state, name, description, vendor, categoryPath, sourceTemplates)
 
         if (state.selectedGenerationTemplateId) {
           const updatedTemplate = await updateGenerationTemplate(state.selectedGenerationTemplateId, payload)
@@ -824,16 +999,44 @@ export const useStore = create<AppState>()(
             generationTemplates: current.generationTemplates.map((template) => (
               template.id === updatedTemplate.id ? updatedTemplate : template
             )),
-            selectedGenerationTemplateId: updatedTemplate.id
+            selectedGenerationTemplateId: updatedTemplate.id,
+            currentGenerationTemplateVendor: updatedTemplate.vendor,
+            currentGenerationTemplateCategoryPath: updatedTemplate.categoryPath
           }))
+          await get().fetchTemplateDirectories()
           return
         }
 
         const createdTemplate = await createGenerationTemplate(payload)
         set((current) => ({
           generationTemplates: [...current.generationTemplates, createdTemplate],
-          selectedGenerationTemplateId: createdTemplate.id
+          selectedGenerationTemplateId: createdTemplate.id,
+          currentGenerationTemplateVendor: createdTemplate.vendor,
+          currentGenerationTemplateCategoryPath: createdTemplate.categoryPath
         }))
+        await get().fetchTemplateDirectories()
+      },
+      moveGenerationTemplate: async (id, vendor, categoryPath) => {
+        const state = get()
+        const template = state.generationTemplates.find((item) => item.id === id)
+        if (!template) {
+          return
+        }
+
+        await updateGenerationTemplate(id, {
+          name: template.name,
+          description: template.description,
+          vendor: vendor.trim() || DEFAULT_VENDOR,
+          categoryPath: normalizeCategoryPath(categoryPath),
+          templateText: template.templateText,
+          sourceTemplates: template.sourceTemplates,
+          bindings: template.bindings
+        })
+
+        await Promise.all([
+          get().fetchGenerationTemplates(),
+          get().fetchTemplateDirectories()
+        ])
       },
       loadGenerationTemplate: async (id) => {
         const state = get()
@@ -845,6 +1048,8 @@ export const useStore = create<AppState>()(
         set({
           generationTemplateText: template.templateText,
           generationBindings: template.bindings,
+          currentGenerationTemplateVendor: template.vendor || DEFAULT_VENDOR,
+          currentGenerationTemplateCategoryPath: template.categoryPath || [],
           selectedGenerationTemplateId: template.id,
           selectedGenerationSourceTemplateIds: template.sourceTemplates.map((sourceTemplate) => sourceTemplate.templateId)
         })
@@ -853,7 +1058,9 @@ export const useStore = create<AppState>()(
         await deleteGenerationTemplateRequest(id)
         set((state) => ({
           generationTemplates: state.generationTemplates.filter((template) => template.id !== id),
-          selectedGenerationTemplateId: state.selectedGenerationTemplateId === id ? null : state.selectedGenerationTemplateId
+          selectedGenerationTemplateId: state.selectedGenerationTemplateId === id ? null : state.selectedGenerationTemplateId,
+          currentGenerationTemplateVendor: state.selectedGenerationTemplateId === id ? DEFAULT_VENDOR : state.currentGenerationTemplateVendor,
+          currentGenerationTemplateCategoryPath: state.selectedGenerationTemplateId === id ? [] : state.currentGenerationTemplateCategoryPath
         }))
       },
       runGeneration: async (options) => {
@@ -869,6 +1076,8 @@ export const useStore = create<AppState>()(
           state,
           options?.name?.trim() || selectedTemplate?.name || 'Unsaved generation template',
           options?.description ?? selectedTemplate?.description ?? '',
+          selectedTemplate?.vendor || state.currentGenerationTemplateVendor,
+          selectedTemplate?.categoryPath || state.currentGenerationTemplateCategoryPath,
           sourceTemplates
         )
 
@@ -917,6 +1126,8 @@ export const useStore = create<AppState>()(
         groups: state.groups,
         generatedTemplate: state.generatedTemplate,
         templateName: state.templateName,
+        currentTemplateVendor: state.currentTemplateVendor,
+        currentTemplateCategoryPath: state.currentTemplateCategoryPath,
         selectedSavedTemplateId: state.selectedSavedTemplateId,
         inputText: state.inputText,
         files: state.files,
@@ -926,6 +1137,8 @@ export const useStore = create<AppState>()(
         selectedTestFileIds: state.selectedTestFileIds,
         generationTemplateText: state.generationTemplateText,
         generationBindings: state.generationBindings,
+        currentGenerationTemplateVendor: state.currentGenerationTemplateVendor,
+        currentGenerationTemplateCategoryPath: state.currentGenerationTemplateCategoryPath,
         selectedGenerationTemplateId: state.selectedGenerationTemplateId,
         selectedGenerationResultIndex: state.selectedGenerationResultIndex,
         selectedGenerationSourceTemplateIds: state.selectedGenerationSourceTemplateIds

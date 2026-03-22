@@ -1,0 +1,4 @@
+<group>
+interface {{ interface }}
+ ip address {{ ip }}/{{ mask }}
+</group>

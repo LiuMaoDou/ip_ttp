@@ -17,6 +17,8 @@ class TemplatePayload(BaseModel):
 
     name: str
     description: str = ""
+    vendor: str = "Unassigned"
+    category_path: list[str] = Field(default_factory=list)
     sample_text: str
     variables: list[dict[str, Any]] = Field(default_factory=list)
     groups: list[dict[str, Any]] = Field(default_factory=list)

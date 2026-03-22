@@ -1,0 +1,14 @@
+{
+  "success": true,
+  "result": [
+    {
+      "ip": "1.1.1.1",
+      "mask": "32",
+      "interface": "Lo0"
+    }
+  ],
+  "csv_result": "\"ip\",\"mask\",\"interface\"\n\"1.1.1.1\",\"32\",\"Lo0\"",
+  "checkup_csv_result": "\"line_text\",\"parse_status\"\n\"interface Lo0\",\"√ 解析\"\n\" ip address 1.1.1.1/32\",\"√ 解析\"\n\"!\",\"X 未解析\"",
+  "error": null,
+  "error_type": null
+}

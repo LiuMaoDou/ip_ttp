@@ -9,6 +9,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from .template_directory_service import (
+    DEFAULT_VENDOR,
+    TEMPLATE_KIND_PARSE,
+    TemplateDirectoryService,
+)
+
 
 DEFAULT_DB_PATH = Path(__file__).resolve().parents[2] / "data" / "ttp_web.db"
 
@@ -38,12 +44,16 @@ class TemplateService:
 
         connection = sqlite3.connect(path)
         try:
+            connection.row_factory = sqlite3.Row
+            TemplateDirectoryService.initialize(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS templates (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
+                    vendor TEXT NOT NULL DEFAULT 'Unassigned',
+                    category_path_json TEXT NOT NULL DEFAULT '[]',
                     sample_text TEXT NOT NULL,
                     variables_json TEXT NOT NULL,
                     groups_json TEXT NOT NULL,
@@ -53,6 +63,19 @@ class TemplateService:
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(templates)").fetchall()
+            }
+            if "vendor" not in columns:
+                connection.execute(
+                    "ALTER TABLE templates ADD COLUMN vendor TEXT NOT NULL DEFAULT 'Unassigned'"
+                )
+            if "category_path_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE templates ADD COLUMN category_path_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            TemplateDirectoryService.ensure_vendor(connection, DEFAULT_VENDOR)
             connection.commit()
         finally:
             connection.close()
@@ -84,6 +107,8 @@ class TemplateService:
             "id": row["id"],
             "name": row["name"],
             "description": row["description"],
+            "vendor": row["vendor"],
+            "category_path": cls._decode_payload(row["category_path_json"]),
             "sample_text": row["sample_text"],
             "variables": cls._decode_payload(row["variables_json"]),
             "groups": cls._decode_payload(row["groups_json"]),
@@ -99,8 +124,8 @@ class TemplateService:
         try:
             rows = connection.execute(
                 """
-                SELECT id, name, description, sample_text, variables_json, groups_json,
-                       generated_template, created_at, updated_at
+                SELECT id, name, description, vendor, category_path_json, sample_text,
+                       variables_json, groups_json, generated_template, created_at, updated_at
                 FROM templates
                 ORDER BY updated_at DESC, created_at DESC, name ASC
                 """
@@ -119,6 +144,8 @@ class TemplateService:
         variables: list[dict[str, Any]],
         groups: list[dict[str, Any]],
         generated_template: str,
+        vendor: str = DEFAULT_VENDOR,
+        category_path: list[str] | None = None,
         db_path: str | Path | None = None,
     ) -> dict[str, Any]:
         """Create a saved template record."""
@@ -127,17 +154,25 @@ class TemplateService:
 
         connection = cls._connect(db_path)
         try:
+            normalized_vendor, normalized_category_path = TemplateDirectoryService.ensure_category_path(
+                connection,
+                TEMPLATE_KIND_PARSE,
+                vendor,
+                category_path,
+            )
             connection.execute(
                 """
                 INSERT INTO templates (
-                    id, name, description, sample_text, variables_json, groups_json,
-                    generated_template, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, description, vendor, category_path_json, sample_text,
+                    variables_json, groups_json, generated_template, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     template_id,
                     name,
                     description,
+                    normalized_vendor,
+                    cls._encode_payload(normalized_category_path),
                     sample_text,
                     cls._encode_payload(variables),
                     cls._encode_payload(groups),
@@ -163,8 +198,8 @@ class TemplateService:
         try:
             row = connection.execute(
                 """
-                SELECT id, name, description, sample_text, variables_json, groups_json,
-                       generated_template, created_at, updated_at
+                SELECT id, name, description, vendor, category_path_json, sample_text,
+                       variables_json, groups_json, generated_template, created_at, updated_at
                 FROM templates
                 WHERE id = ?
                 """,
@@ -188,6 +223,8 @@ class TemplateService:
         variables: list[dict[str, Any]],
         groups: list[dict[str, Any]],
         generated_template: str,
+        vendor: str = DEFAULT_VENDOR,
+        category_path: list[str] | None = None,
         db_path: str | Path | None = None,
     ) -> dict[str, Any] | None:
         """Update a saved template by id."""
@@ -195,11 +232,19 @@ class TemplateService:
 
         connection = cls._connect(db_path)
         try:
+            normalized_vendor, normalized_category_path = TemplateDirectoryService.ensure_category_path(
+                connection,
+                TEMPLATE_KIND_PARSE,
+                vendor,
+                category_path,
+            )
             result = connection.execute(
                 """
                 UPDATE templates
                 SET name = ?,
                     description = ?,
+                    vendor = ?,
+                    category_path_json = ?,
                     sample_text = ?,
                     variables_json = ?,
                     groups_json = ?,
@@ -210,6 +255,8 @@ class TemplateService:
                 (
                     name,
                     description,
+                    normalized_vendor,
+                    cls._encode_payload(normalized_category_path),
                     sample_text,
                     cls._encode_payload(variables),
                     cls._encode_payload(groups),

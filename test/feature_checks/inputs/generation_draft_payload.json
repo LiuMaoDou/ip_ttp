@@ -1,0 +1,13 @@
+{
+  "name": "draft-config",
+  "description": "Draft generator",
+  "template_text": "hostname {{ data.interfaces.loopbacks.ip }}",
+  "source_templates": [
+    {
+      "template_id": "parse-template-1",
+      "template_name": "interfaces",
+      "template_alias": "interfaces"
+    }
+  ],
+  "bindings": []
+}

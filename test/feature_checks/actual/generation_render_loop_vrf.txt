@@ -1,0 +1,17 @@
+system-view
+#
+sysname PE2
+#
+ip vpn-instance VRF_01
+ ipv4-family
+  route-distinguisher 65000:1
+  vpn-target 65000:1 export-extcommunity
+  vpn-target 65000:1 import-extcommunity
+#
+ip vpn-instance VRF_02
+ ipv4-family
+  route-distinguisher 65000:2
+  vpn-target 65000:2 export-extcommunity
+  vpn-target 65000:2 import-extcommunity
+#
+return

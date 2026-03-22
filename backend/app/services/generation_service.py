@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from .template_service import DEFAULT_DB_PATH
+from .template_directory_service import (
+    DEFAULT_VENDOR,
+    TEMPLATE_KIND_GENERATION,
+    TemplateDirectoryService,
+)
 
 
 def _current_timestamp() -> int:
@@ -38,12 +43,16 @@ class GenerationTemplateService:
 
         connection = sqlite3.connect(path)
         try:
+            connection.row_factory = sqlite3.Row
+            TemplateDirectoryService.initialize(connection)
             connection.execute(
                 """
                 CREATE TABLE IF NOT EXISTS generation_templates (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
                     description TEXT NOT NULL DEFAULT '',
+                    vendor TEXT NOT NULL DEFAULT 'Unassigned',
+                    category_path_json TEXT NOT NULL DEFAULT '[]',
                     template_text TEXT NOT NULL,
                     source_templates_json TEXT NOT NULL,
                     bindings_json TEXT NOT NULL,
@@ -52,6 +61,19 @@ class GenerationTemplateService:
                 )
                 """
             )
+            columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(generation_templates)").fetchall()
+            }
+            if "vendor" not in columns:
+                connection.execute(
+                    "ALTER TABLE generation_templates ADD COLUMN vendor TEXT NOT NULL DEFAULT 'Unassigned'"
+                )
+            if "category_path_json" not in columns:
+                connection.execute(
+                    "ALTER TABLE generation_templates ADD COLUMN category_path_json TEXT NOT NULL DEFAULT '[]'"
+                )
+            TemplateDirectoryService.ensure_vendor(connection, DEFAULT_VENDOR)
             connection.commit()
         finally:
             connection.close()
@@ -61,7 +83,7 @@ class GenerationTemplateService:
     @classmethod
     def _connect(cls, db_path: str | Path | None = None) -> sqlite3.Connection:
         """Create a SQLite connection with row access by column name."""
-        path = cls.get_db_path(db_path)
+        path = cls.initialize(db_path)
         connection = sqlite3.connect(path)
         connection.row_factory = sqlite3.Row
         return connection
@@ -83,6 +105,8 @@ class GenerationTemplateService:
             "id": row["id"],
             "name": row["name"],
             "description": row["description"],
+            "vendor": row["vendor"],
+            "category_path": cls._decode_payload(row["category_path_json"]),
             "template_text": row["template_text"],
             "source_templates": cls._decode_payload(row["source_templates_json"]),
             "bindings": cls._decode_payload(row["bindings_json"]),
@@ -97,8 +121,8 @@ class GenerationTemplateService:
         try:
             rows = connection.execute(
                 """
-                SELECT id, name, description, template_text, source_templates_json,
-                       bindings_json, created_at, updated_at
+                SELECT id, name, description, vendor, category_path_json, template_text,
+                       source_templates_json, bindings_json, created_at, updated_at
                 FROM generation_templates
                 ORDER BY updated_at DESC, created_at DESC, name ASC
                 """
@@ -116,6 +140,8 @@ class GenerationTemplateService:
         template_text: str,
         source_templates: list[dict[str, Any]],
         bindings: list[dict[str, Any]],
+        vendor: str = DEFAULT_VENDOR,
+        category_path: list[str] | None = None,
         db_path: str | Path | None = None,
     ) -> dict[str, Any]:
         """Create a saved generation template record."""
@@ -124,17 +150,25 @@ class GenerationTemplateService:
 
         connection = cls._connect(db_path)
         try:
+            normalized_vendor, normalized_category_path = TemplateDirectoryService.ensure_category_path(
+                connection,
+                TEMPLATE_KIND_GENERATION,
+                vendor,
+                category_path,
+            )
             connection.execute(
                 """
                 INSERT INTO generation_templates (
-                    id, name, description, template_text, source_templates_json,
-                    bindings_json, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, description, vendor, category_path_json, template_text,
+                    source_templates_json, bindings_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     template_id,
                     name,
                     description,
+                    normalized_vendor,
+                    cls._encode_payload(normalized_category_path),
                     template_text,
                     cls._encode_payload(source_templates),
                     cls._encode_payload(bindings),
@@ -159,8 +193,8 @@ class GenerationTemplateService:
         try:
             row = connection.execute(
                 """
-                SELECT id, name, description, template_text, source_templates_json,
-                       bindings_json, created_at, updated_at
+                SELECT id, name, description, vendor, category_path_json, template_text,
+                       source_templates_json, bindings_json, created_at, updated_at
                 FROM generation_templates
                 WHERE id = ?
                 """,
@@ -183,6 +217,8 @@ class GenerationTemplateService:
         template_text: str,
         source_templates: list[dict[str, Any]],
         bindings: list[dict[str, Any]],
+        vendor: str = DEFAULT_VENDOR,
+        category_path: list[str] | None = None,
         db_path: str | Path | None = None,
     ) -> dict[str, Any] | None:
         """Update a saved generation template by id."""
@@ -190,11 +226,19 @@ class GenerationTemplateService:
 
         connection = cls._connect(db_path)
         try:
+            normalized_vendor, normalized_category_path = TemplateDirectoryService.ensure_category_path(
+                connection,
+                TEMPLATE_KIND_GENERATION,
+                vendor,
+                category_path,
+            )
             result = connection.execute(
                 """
                 UPDATE generation_templates
                 SET name = ?,
                     description = ?,
+                    vendor = ?,
+                    category_path_json = ?,
                     template_text = ?,
                     source_templates_json = ?,
                     bindings_json = ?,
@@ -204,6 +248,8 @@ class GenerationTemplateService:
                 (
                     name,
                     description,
+                    normalized_vendor,
+                    cls._encode_payload(normalized_category_path),
                     template_text,
                     cls._encode_payload(source_templates),
                     cls._encode_payload(bindings),
