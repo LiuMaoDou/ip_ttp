@@ -32,7 +32,7 @@ export default function GroupModal({ selectedText, startLine, endLine, onConfirm
   }
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-lg p-6 w-[480px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Add Group</h3>
 

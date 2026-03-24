@@ -76,8 +76,11 @@ export default function App() {
     <div className="h-screen flex flex-col" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
       <header className="px-4 py-3 border-b" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>mini-IPMaster</h1>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="min-w-0">
+              <h1 className="text-xl font-bold leading-none" style={{ color: 'var(--text-primary)' }}>mini-IPMaster</h1>
+              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Template parsing workspace</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-4">
@@ -98,7 +101,7 @@ export default function App() {
               )}
             </button>
 
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
               <div className={`w-2 h-2 rounded-full ${
                 backendStatus === 'checking' ? 'bg-yellow-500 animate-pulse' :
                 backendStatus === 'connected' ? 'bg-green-500' :
@@ -115,12 +118,12 @@ export default function App() {
       </header>
 
       <nav className="border-b hidden md:flex" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-        <div className="flex">
+        <div className="flex px-2">
           {tabs.map((tab) => (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className="flex items-center gap-2 px-6 py-3 text-sm font-medium transition-colors"
+              className="flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors rounded-t-md"
               style={{
                 color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)',
                 backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',

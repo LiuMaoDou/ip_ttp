@@ -979,10 +979,10 @@ export default function TemplateBuilder() {
         <div className="flex-1 flex min-w-0">
           {/* Sample Input Editor (Left) */}
           <div className="flex-1 relative border-r" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-1 border-b text-xs font-medium" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
               Sample Input
             </div>
-            <div className="pt-7 h-full">
+            <div className="pt-9 h-full">
               <Editor
                 height="100%"
                 defaultLanguage="plaintext"
@@ -1003,7 +1003,7 @@ export default function TemplateBuilder() {
             </div>
             {/* Instructions overlay */}
             {sampleText === '' && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none pt-7">
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none pt-9">
                 <div className="text-center p-8" style={{ color: 'var(--text-muted)' }}>
                   <p className="text-lg mb-2">Enter sample text or load a file</p>
                   <p className="text-sm">Select text, right-click to add variables or groups</p>
@@ -1014,11 +1014,11 @@ export default function TemplateBuilder() {
 
           {/* Generated Template Editor (Right) */}
           <div className="flex-1 relative" style={{ minWidth: '200px' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-1 border-b text-xs font-medium flex items-center justify-between" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
+            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center justify-between" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
               <span>Generated Template</span>
               {templateName && <span style={{ color: 'var(--accent-primary)' }}>{templateName}</span>}
             </div>
-            <div className="pt-7 h-full">
+            <div className="pt-9 h-full">
               {generatedTemplate ? (
                 <Editor
                   key={generatedTemplate}
@@ -1089,7 +1089,7 @@ export default function TemplateBuilder() {
 
       {/* Template Name Modal */}
       {showTemplateNameModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
             <input

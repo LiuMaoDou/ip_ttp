@@ -642,7 +642,7 @@ export default function ConfigGeneration() {
   return (
     <>
       {showSaveModal && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
             <input
@@ -709,38 +709,43 @@ export default function ConfigGeneration() {
       )}
       <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
         <div className="page-header">
-        <h2>Config Generation (Not Ready)</h2>
-        <div className="flex gap-2 items-center">
-          <label className="btn cursor-pointer">
-            Upload Template
-            <input type="file" accept=".txt,.cfg,.conf,.jinja,.j2" className="hidden" onChange={handleTemplateUpload} />
-          </label>
-          <button
-            className="btn"
-            onClick={() => void handleOpenSaveModal()}
-            disabled={isSaving || !generationTemplateText.trim()}
-          >
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            className="btn"
-            onClick={handleDownloadTemplate}
-            disabled={!generationTemplateText.trim()}
-          >
-            Download Template
-          </button>
-          <button
-            className="btn"
-            onClick={() => void handleGenerate()}
-            disabled={isGeneratingConfig || !generationTemplateText.trim() || generationUploadedFiles.length === 0}
-          >
-            {isGeneratingConfig ? 'Generating...' : 'Generate'}
-          </button>
-          <button className="btn" onClick={() => void handleDownloadAll()} disabled={!generationResults.some((result) => result.success && result.generatedText)}>
-            Download All
-          </button>
+          <div className="flex items-center gap-3 min-w-0">
+            <h2>Config Generation (Not Ready)</h2>
+            <span className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
+              Experimental
+            </span>
+          </div>
+          <div className="flex gap-2 items-center">
+            <label className="btn cursor-pointer">
+              Upload Template
+              <input type="file" accept=".txt,.cfg,.conf,.jinja,.j2" className="hidden" onChange={handleTemplateUpload} />
+            </label>
+            <button
+              className="btn"
+              onClick={() => void handleOpenSaveModal()}
+              disabled={isSaving || !generationTemplateText.trim()}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+            <button
+              className="btn"
+              onClick={handleDownloadTemplate}
+              disabled={!generationTemplateText.trim()}
+            >
+              Download Template
+            </button>
+            <button
+              className="btn"
+              onClick={() => void handleGenerate()}
+              disabled={isGeneratingConfig || !generationTemplateText.trim() || generationUploadedFiles.length === 0}
+            >
+              {isGeneratingConfig ? 'Generating...' : 'Generate'}
+            </button>
+            <button className="btn" onClick={() => void handleDownloadAll()} disabled={!generationResults.some((result) => result.success && result.generatedText)}>
+              Download All
+            </button>
+          </div>
         </div>
-      </div>
 
       <div
         className="flex-1 grid min-h-0"
@@ -898,7 +903,7 @@ export default function ConfigGeneration() {
                     className="p-2 rounded border cursor-pointer flex items-center justify-between gap-2"
                     style={{
                       borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                      backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.12)' : 'transparent'
+                      backgroundColor: isSelected ? 'var(--surface-selected-bg)' : 'transparent'
                     }}
                     onClick={() => setSelectedGenerationFileId(file.id)}
                   >
@@ -923,7 +928,7 @@ export default function ConfigGeneration() {
               <button className="btn" onClick={clearGenerationUploadedFiles} disabled={generationUploadedFiles.length === 0}>Clear Files</button>
             </div>
             {previewFile && (
-              <pre className="mt-3 text-xs whitespace-pre-wrap rounded p-3 overflow-auto max-h-40" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)' }}>
+              <pre className="mt-3 text-xs whitespace-pre-wrap rounded p-3 overflow-auto max-h-40" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)', color: 'var(--text-primary)' }}>
                 {previewFile.content}
               </pre>
             )}
@@ -945,7 +950,7 @@ export default function ConfigGeneration() {
                   className="w-full text-left p-2 rounded border"
                   style={{
                     borderColor: selectedGenerationResultIndex === index ? 'var(--accent-primary)' : 'var(--border-color)',
-                    backgroundColor: selectedGenerationResultIndex === index ? 'rgba(59, 130, 246, 0.12)' : 'transparent'
+                    backgroundColor: selectedGenerationResultIndex === index ? 'var(--surface-selected-bg)' : 'transparent'
                   }}
                   onClick={() => setSelectedGenerationResultIndex(index)}
                 >
@@ -956,7 +961,7 @@ export default function ConfigGeneration() {
                 </button>
               ))}
             </div>
-            <pre className="text-xs whitespace-pre-wrap rounded p-3 overflow-auto" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-primary)', minHeight: '8rem' }}>
+            <pre className="text-xs whitespace-pre-wrap rounded p-3 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)', color: 'var(--text-primary)', minHeight: '8rem' }}>
               {currentResult
                 ? currentResult.success
                   ? currentResult.generatedText

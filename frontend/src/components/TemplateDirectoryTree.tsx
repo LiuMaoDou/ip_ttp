@@ -337,8 +337,8 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
         className="rounded-md transition-colors"
         style={{
           marginLeft: `${depth * 12}px`,
-          backgroundColor: isActive || isSelected ? 'rgba(59, 130, 246, 0.16)' : 'transparent',
-          border: isActive || isSelected ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent'
+          backgroundColor: isActive || isSelected ? 'var(--surface-selected-bg)' : 'transparent',
+          border: isActive || isSelected ? '1px solid var(--surface-selected-border)' : '1px solid transparent'
         }}
       >
         <div
@@ -519,7 +519,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
         </div>
       )}
       {moveTarget && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-lg p-6 w-[420px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Move Template</h3>
             <div className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>

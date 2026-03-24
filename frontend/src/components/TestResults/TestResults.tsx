@@ -1017,7 +1017,7 @@ export default function TestResults() {
     <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
       <div className="page-header">
         <div className="flex items-center gap-3 min-w-0">
-          <h2 style={{ fontSize: '14px' }}>Test & Results</h2>
+          <h2>Test & Results</h2>
           <div
             className="h-5 border-l border-dashed"
             style={{ borderColor: 'var(--border-color)' }}
@@ -1364,7 +1364,7 @@ export default function TestResults() {
               )}
             </div>
           </div>
-          <div className="flex-1 overflow-auto p-4" style={{ backgroundColor: theme === 'dark' ? '#181825' : '#f8fafc' }}>
+          <div className="flex-1 overflow-auto p-4" style={{ backgroundColor: 'var(--surface-code)' }}>
             {previewFile ? (
               <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
                 {previewFile.content}
@@ -1458,16 +1458,16 @@ export default function TestResults() {
                 style={{
                   backgroundColor:
                     currentMergedResultState === 'success'
-                      ? theme === 'dark' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)'
+                      ? 'var(--surface-success-bg)'
                       : currentMergedResultState === 'error'
-                        ? theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)'
-                        : theme === 'dark' ? 'rgba(245, 158, 11, 0.16)' : 'rgba(245, 158, 11, 0.12)',
+                        ? 'var(--surface-error-bg)'
+                        : 'var(--surface-warning-bg)',
                   border:
                     currentMergedResultState === 'success'
-                      ? '1px solid rgba(34, 197, 94, 0.3)'
+                      ? '1px solid var(--surface-success-border)'
                       : currentMergedResultState === 'error'
-                        ? '1px solid rgba(239, 68, 68, 0.3)'
-                        : '1px solid rgba(245, 158, 11, 0.35)'
+                        ? '1px solid var(--surface-error-border)'
+                        : '1px solid var(--surface-warning-border)'
                 }}
               >
                 {currentMergedResultState === 'success' ? (
@@ -1535,7 +1535,7 @@ export default function TestResults() {
                   </div>
                 )}
               </div>
-              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: theme === 'dark' ? '#1e1e2e' : '#f8fafc', border: `1px solid ${theme === 'dark' ? '#313244' : '#e2e8f0'}` }}>
+              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)' }}>
                 <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
                   {JSON.stringify(currentMergedResult.payload, null, 2)}
                 </pre>
@@ -1543,7 +1543,7 @@ export default function TestResults() {
             </div>
           ) : currentResult?.success ? (
             <div>
-              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.3)' }}>
+              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: 'var(--surface-success-bg)', border: '1px solid var(--surface-success-border)' }}>
                 <svg className="w-5 h-5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                 </svg>
@@ -1625,7 +1625,7 @@ export default function TestResults() {
                   </div>
                 )}
               </div>
-              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: theme === 'dark' ? '#1e1e2e' : '#f8fafc', border: `1px solid ${theme === 'dark' ? '#313244' : '#e2e8f0'}` }}>
+              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)' }}>
                 <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
                   {JSON.stringify(currentResult.result, null, 2)}
                 </pre>
@@ -1633,7 +1633,7 @@ export default function TestResults() {
             </div>
           ) : (
             <div>
-              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)' }}>
+              <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: 'var(--surface-error-bg)', border: '1px solid var(--surface-error-border)' }}>
                 <svg className="w-5 h-5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -1644,7 +1644,7 @@ export default function TestResults() {
                   </span>
                 )}
               </div>
-              <div className="rounded-lg p-4" style={{ backgroundColor: theme === 'dark' ? '#1c1917' : '#fef2f2', border: `1px solid ${theme === 'dark' ? '#292524' : '#fecaca'}` }}>
+              <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--surface-error-panel)', border: '1px solid var(--surface-error-panel-border)' }}>
                 {currentResult?.errorType && (
                   <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
                 )}
@@ -1779,7 +1779,7 @@ export default function TestResults() {
       {showTemplateSelector && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
-          style={{ backgroundColor: 'rgba(0, 0, 0, 0.45)' }}
+          style={{ backgroundColor: 'var(--overlay-backdrop)' }}
           onClick={() => setShowTemplateSelector(false)}
         >
           <div
