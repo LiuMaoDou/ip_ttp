@@ -63,7 +63,7 @@ export default function App() {
     },
     {
       id: 'config',
-      label: 'Config Generation',
+      label: 'Config Generation (Not Ready)',
       icon: (
         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
@@ -77,8 +77,7 @@ export default function App() {
       <header className="px-4 py-3 border-b" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>TTP Web</h1>
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Template Text Parser</span>
+            <h1 className="text-xl font-bold" style={{ color: 'var(--text-primary)' }}>mini-IPMaster</h1>
           </div>
 
           <div className="flex items-center gap-4">
@@ -177,9 +176,9 @@ export default function App() {
       </main>
 
       <footer className="px-4 py-2 text-center text-xs border-t" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-        TTP Web - Interactive Template Text Parser |{' '}
+        mini-IPMaster |{' '}
         <a
-          href="https://github.com/dmulyalin/ttp"
+          href="https://github.com/LiuMaoDou/ip_ttp/tree/master"
           target="_blank"
           rel="noopener noreferrer"
           style={{ color: 'var(--accent-primary)' }}

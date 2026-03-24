@@ -50,9 +50,6 @@ export default function VariableList({ variables, groups, onEditVariable, onRemo
                         &lt;group&gt;
                       </span>
                     </div>
-                    <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                      Lines {group.startLine} - {group.endLine}
-                    </div>
                   </div>
                   <button
                     onClick={() => onRemoveGroup(group.id)}
@@ -114,12 +111,6 @@ export default function VariableList({ variables, groups, onEditVariable, onRemo
                           {indicator}
                         </span>
                       ))}
-                    </div>
-                    <div className="text-xs mt-1 truncate" style={{ color: 'var(--text-muted)' }} title={variable.originalText}>
-                      "{variable.originalText}"
-                    </div>
-                    <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>
-                      Line {variable.startLine}, Col {variable.startColumn}
                     </div>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">

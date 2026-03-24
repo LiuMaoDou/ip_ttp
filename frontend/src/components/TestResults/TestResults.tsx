@@ -6,6 +6,7 @@ import JSZip from 'jszip'
 import { saveAs } from 'file-saver'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import { formatFileSize, sanitizeFileNameSegment } from '../../utils'
+import { buildMergedExcelBlob } from './mergedExcel'
 
 interface TemplateSource {
   id: string
@@ -15,6 +16,80 @@ interface TemplateSource {
   categoryPath: string[]
   description?: string
   source: 'current' | 'saved'
+}
+
+interface MergedResultGroup {
+  fileId: string
+  fileName: string
+  results: FileParseResult[]
+  payload: unknown
+  successfulCount: number
+  failedCount: number
+}
+
+interface IndividualResultGroup {
+  fileId: string
+  fileName: string
+  items: Array<{ result: FileParseResult; index: number }>
+  successfulCount: number
+  failedCount: number
+}
+
+interface UploadedFileGroup {
+  groupId: string
+  groupName: string
+  files: UploadedFile[]
+}
+
+type ResultViewMode = 'individual' | 'merged'
+
+const TEST_RESULTS_SELECTED_TEMPLATE_IDS_STORAGE_KEY = 'ttp-test-results-selected-template-ids'
+const SUPPORTED_TEST_FILE_EXTENSIONS = new Set([
+  '.txt', '.log', '.cfg', '.conf', '.json', '.xml', '.yaml', '.yml'
+])
+
+function ResultChevronIcon({ expanded }: { expanded: boolean }) {
+  return (
+    <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={2}
+        d={expanded ? 'M6 15l6-6 6 6' : 'M9 6l6 6-6 6'}
+      />
+    </svg>
+  )
+}
+
+function ResultFolderIcon() {
+  return (
+    <svg className="w-4 h-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M3 7.5A1.5 1.5 0 014.5 6h4.379a1.5 1.5 0 011.06.44l1.122 1.12a1.5 1.5 0 001.06.44H19.5A1.5 1.5 0 0121 9.5v8A2.5 2.5 0 0118.5 20h-13A2.5 2.5 0 013 17.5v-10z" />
+    </svg>
+  )
+}
+
+function getPathExtension(path: string): string {
+  const normalizedPath = path.replace(/\\/g, '/')
+  const fileName = normalizedPath.split('/').pop() || normalizedPath
+  const extensionIndex = fileName.lastIndexOf('.')
+  return extensionIndex >= 0 ? fileName.slice(extensionIndex).toLowerCase() : ''
+}
+
+function isSupportedTestFilePath(path: string): boolean {
+  return SUPPORTED_TEST_FILE_EXTENSIONS.has(getPathExtension(path))
+}
+
+function decodeTextBytes(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+  } catch {
+    return new TextDecoder('latin1').decode(bytes)
+  }
+}
+
+function getZipUploadGroupName(fileName: string): string {
+  return fileName.replace(/\.zip$/i, '') || fileName
 }
 
 function getResultDownloadBaseName(result: FileParseResult): string {
@@ -33,6 +108,15 @@ function getResultCsvDownloadName(result: FileParseResult): string {
 
 function getResultCheckupDownloadName(result: FileParseResult): string {
   return `${getResultDownloadBaseName(result)}.checkup.csv`
+}
+
+function getMergedResultJsonDownloadName(fileName: string): string {
+  const baseName = fileName.replace(/\.[^/.]+$/, '') || 'result'
+  return `${baseName}.merged.json`
+}
+
+function getMergedExcelDownloadName(): string {
+  return 'parse_results_merged.xlsx'
 }
 
 function getConfigGenerationDownloadName(fileName: string): string {
@@ -87,6 +171,123 @@ function getCheckupCsvContent(result: Pick<FileParseResult, 'checkupCsvResult'>)
   return result.checkupCsvResult || ''
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function cloneMergedValue(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneMergedValue(item))
+  }
+
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, cloneMergedValue(item)])
+    )
+  }
+
+  return value
+}
+
+function mergeMergedValues(currentValue: unknown, nextValue: unknown): unknown {
+  if (currentValue === undefined) {
+    return cloneMergedValue(nextValue)
+  }
+
+  if (Array.isArray(currentValue) && Array.isArray(nextValue)) {
+    return [...currentValue, ...nextValue.map((item) => cloneMergedValue(item))]
+  }
+
+  if (isPlainObject(currentValue) && isPlainObject(nextValue)) {
+    const mergedValue: Record<string, unknown> = { ...currentValue }
+
+    Object.entries(nextValue).forEach(([key, value]) => {
+      mergedValue[key] = key in mergedValue
+        ? mergeMergedValues(mergedValue[key], value)
+        : cloneMergedValue(value)
+    })
+
+    return mergedValue
+  }
+
+  if (Object.is(currentValue, nextValue)) {
+    return currentValue
+  }
+
+  return [currentValue, cloneMergedValue(nextValue)]
+}
+
+function buildMergedResultPayload(results: FileParseResult[]): unknown {
+  let mergedPayload: unknown = undefined
+  const errors: Array<{ error: string; errorType?: string }> = []
+
+  results.forEach((result) => {
+    if (hasDownloadableResult(result)) {
+      mergedPayload = mergeMergedValues(mergedPayload, result.result)
+      return
+    }
+
+    errors.push({
+      error: result.error || 'Unknown error',
+      ...(result.errorType ? { errorType: result.errorType } : {})
+    })
+  })
+
+  if (errors.length === 0) {
+    return mergedPayload ?? {}
+  }
+
+  if (isPlainObject(mergedPayload)) {
+    return {
+      ...mergedPayload,
+      errors
+    }
+  }
+
+  return {
+    result: mergedPayload ?? null,
+    errors
+  }
+}
+
+function buildMergedResultsDownloadPayload(groups: MergedResultGroup[]): unknown {
+  if (groups.length === 1) {
+    return groups[0].payload
+  }
+
+  return groups.map((group) => group.payload)
+}
+
+function getMergedResultState(group: Pick<MergedResultGroup, 'successfulCount' | 'failedCount'>): 'success' | 'mixed' | 'error' {
+  if (group.successfulCount > 0 && group.failedCount === 0) {
+    return 'success'
+  }
+
+  if (group.successfulCount > 0) {
+    return 'mixed'
+  }
+
+  return 'error'
+}
+
+function loadStoredSelectedTemplateIds(): string[] {
+  if (typeof window === 'undefined') {
+    return []
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(TEST_RESULTS_SELECTED_TEMPLATE_IDS_STORAGE_KEY)
+    if (!rawValue) {
+      return []
+    }
+
+    const parsedValue = JSON.parse(rawValue)
+    return Array.isArray(parsedValue) ? parsedValue.filter((value): value is string => typeof value === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 export default function TestResults() {
   const {
     generatedTemplate,
@@ -115,9 +316,14 @@ export default function TestResults() {
     clearFileResults
   } = useStore()
 
-  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([])
+  const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>(() => loadStoredSelectedTemplateIds())
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const [showResultDownloadMenu, setShowResultDownloadMenu] = useState(false)
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
+  const [resultViewMode, setResultViewMode] = useState<ResultViewMode>('individual')
+  const [selectedMergedResultIndex, setSelectedMergedResultIndex] = useState(0)
+  const [collapsedResultFileGroups, setCollapsedResultFileGroups] = useState<Record<string, boolean>>({})
+  const [collapsedUploadedFileGroups, setCollapsedUploadedFileGroups] = useState<Record<string, boolean>>({})
   const bulkDownloadMenuRef = useRef<HTMLDivElement | null>(null)
   const resultDownloadMenuRef = useRef<HTMLDivElement | null>(null)
 
@@ -169,6 +375,17 @@ export default function TestResults() {
       return preferredId ? [preferredId] : optionIds.slice(0, 1)
     })
   }, [currentTemplateOption, savedTemplateOptions, templateName])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    window.localStorage.setItem(
+      TEST_RESULTS_SELECTED_TEMPLATE_IDS_STORAGE_KEY,
+      JSON.stringify(selectedTemplateIds)
+    )
+  }, [selectedTemplateIds])
 
   useEffect(() => {
     const fileIds = files.map((file) => file.id)
@@ -234,6 +451,40 @@ export default function TestResults() {
     [files, selectedTestFileIds]
   )
 
+  const uploadedFileGroups = useMemo<UploadedFileGroup[]>(
+    () => {
+      const grouped = new Map<string, UploadedFileGroup>()
+      files.forEach((file) => {
+        if (!file.uploadGroupId || !file.uploadGroupName) {
+          return
+        }
+
+        const existing = grouped.get(file.uploadGroupId)
+        if (existing) {
+          existing.files.push(file)
+          return
+        }
+
+        grouped.set(file.uploadGroupId, {
+          groupId: file.uploadGroupId,
+          groupName: file.uploadGroupName,
+          files: [file]
+        })
+      })
+
+      return Array.from(grouped.values()).map((group) => ({
+        ...group,
+        files: [...group.files].sort((left, right) => left.name.localeCompare(right.name))
+      }))
+    },
+    [files]
+  )
+
+  const directUploadedFiles = useMemo(
+    () => files.filter((file) => !file.uploadGroupId),
+    [files]
+  )
+
   const previewFile = files.find((file) => file.id === selectedFileId) ?? null
 
   const configGenerationAliasMap = useMemo(() => {
@@ -275,43 +526,157 @@ export default function TestResults() {
       .filter((group): group is { fileName: string; payload: Record<string, unknown> } => Boolean(group.payload))
   }, [configGenerationAliasMap, fileResults])
 
+  const mergedResults = useMemo<MergedResultGroup[]>(() => {
+    const grouped = new Map<string, { fileName: string; results: FileParseResult[] }>()
+
+    fileResults.forEach((result) => {
+      const existing = grouped.get(result.fileId)
+      if (existing) {
+        existing.results.push(result)
+        return
+      }
+
+      grouped.set(result.fileId, {
+        fileName: result.fileName,
+        results: [result]
+      })
+    })
+
+    return Array.from(grouped.entries()).map(([fileId, group]) => {
+      const successfulCount = group.results.filter((result) => result.success).length
+      const failedCount = group.results.length - successfulCount
+
+      return {
+        fileId,
+        fileName: group.fileName,
+        results: group.results,
+        payload: buildMergedResultPayload(group.results),
+        successfulCount,
+        failedCount
+      }
+    })
+  }, [fileResults])
+
+  const individualResultGroups = useMemo<IndividualResultGroup[]>(() => {
+    const grouped = new Map<string, IndividualResultGroup>()
+
+    fileResults.forEach((result, index) => {
+      const existing = grouped.get(result.fileId)
+      if (existing) {
+        existing.items.push({ result, index })
+        if (result.success) {
+          existing.successfulCount += 1
+        } else {
+          existing.failedCount += 1
+        }
+        return
+      }
+
+      grouped.set(result.fileId, {
+        fileId: result.fileId,
+        fileName: result.fileName,
+        items: [{ result, index }],
+        successfulCount: result.success ? 1 : 0,
+        failedCount: result.success ? 0 : 1
+      })
+    })
+
+    return Array.from(grouped.values())
+  }, [fileResults])
+
+  const canShowMergedView = mergedResults.some((group) => group.results.length > 1)
   const canDownloadConfigGeneration = groupedConfigGenerationPayloads.length > 0
 
-  const onDrop = useCallback((acceptedFiles: File[]) => {
+  useEffect(() => {
+    if (!canShowMergedView && resultViewMode === 'merged') {
+      setResultViewMode('individual')
+    }
+  }, [canShowMergedView, resultViewMode])
+
+  useEffect(() => {
+    if (mergedResults.length === 0) {
+      setSelectedMergedResultIndex(0)
+      return
+    }
+
+    setSelectedMergedResultIndex((current) => Math.min(current, mergedResults.length - 1))
+  }, [mergedResults])
+
+  useEffect(() => {
+    const validFileIds = new Set(individualResultGroups.map((group) => group.fileId))
+    setCollapsedResultFileGroups((current) => (
+      Object.fromEntries(
+        Object.entries(current).filter(([fileId]) => validFileIds.has(fileId))
+      )
+    ))
+  }, [individualResultGroups])
+
+  useEffect(() => {
+    const validGroupIds = new Set(uploadedFileGroups.map((group) => group.groupId))
+    setCollapsedUploadedFileGroups((current) => (
+      Object.fromEntries(
+        Object.entries(current).filter(([groupId]) => validGroupIds.has(groupId))
+      )
+    ))
+  }, [uploadedFileGroups])
+
+  const onDrop = useCallback(async (acceptedFiles: File[]) => {
     clearFileResults()
 
-    acceptedFiles.forEach((file, index) => {
+    const readPlainFile = (file: File) => new Promise<string>((resolve, reject) => {
       const reader = new FileReader()
-      reader.onload = () => {
-        const content = reader.result as string
-        const newFile: UploadedFile = {
-          id: `file-${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
-          name: file.name,
-          size: file.size,
-          content
-        }
-
-        addFile(newFile)
-        setSelectedTestFileIds((current) => {
-          if (current === null) {
-            return [newFile.id]
-          }
-          return current.includes(newFile.id) ? current : [...current, newFile.id]
-        })
-
-        if (index === 0) {
-          selectFile(newFile.id)
-        }
-      }
+      reader.onload = () => resolve(reader.result as string)
+      reader.onerror = () => reject(reader.error || new Error(`Failed to read ${file.name}`))
       reader.readAsText(file)
     })
+
+    const uploadedFiles: UploadedFile[] = []
+
+    for (const file of acceptedFiles) {
+      if (getPathExtension(file.name) === '.zip') {
+        const uploadGroupId = `zip-${Date.now()}-${uploadedFiles.length}-${Math.random().toString(36).substr(2, 9)}`
+        const uploadGroupName = getZipUploadGroupName(file.name)
+        const zip = await JSZip.loadAsync(file)
+        const entries = Object.values(zip.files)
+          .filter((entry) => !entry.dir && isSupportedTestFilePath(entry.name))
+          .sort((left, right) => left.name.localeCompare(right.name))
+
+        for (const entry of entries) {
+          const bytes = await entry.async('uint8array')
+          const content = decodeTextBytes(bytes)
+          uploadedFiles.push({
+            id: `file-${Date.now()}-${uploadedFiles.length}-${Math.random().toString(36).substr(2, 9)}`,
+            name: entry.name,
+            size: bytes.length,
+            content,
+            uploadGroupId,
+            uploadGroupName
+          })
+        }
+
+        continue
+      }
+
+      const content = await readPlainFile(file)
+      uploadedFiles.push({
+        id: `file-${Date.now()}-${uploadedFiles.length}-${Math.random().toString(36).substr(2, 9)}`,
+        name: file.name,
+        size: file.size,
+        content
+      })
+    }
+
+    uploadedFiles.forEach((uploadedFile) => addFile(uploadedFile))
+    setSelectedTestFileIds(uploadedFiles.map((uploadedFile) => uploadedFile.id))
+    selectFile(uploadedFiles[0]?.id || null)
   }, [addFile, clearFileResults, selectFile, setSelectedTestFileIds])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     accept: {
       'text/*': ['.txt', '.log', '.cfg', '.conf', '.json', '.xml', '.yaml', '.yml'],
-      'application/*': ['.cfg', '.conf']
+      'application/*': ['.cfg', '.conf', '.zip'],
+      'application/zip': ['.zip']
     },
     multiple: true
   })
@@ -322,6 +687,23 @@ export default function TestResults() {
         ? prev.filter((templateId) => templateId !== id)
         : [...prev, id]
     ))
+  }
+
+  const handleSelectAllTemplates = () => {
+    const allTemplateIds = [
+      ...(currentTemplateOption ? [currentTemplateOption.id] : []),
+      ...savedTemplateOptions.map((template) => template.id)
+    ]
+
+    if (allTemplateIds.length === 0) {
+      return
+    }
+
+    const isAllSelected =
+      selectedTemplateIds.length === allTemplateIds.length &&
+      allTemplateIds.every((templateId) => selectedTemplateIds.includes(templateId))
+
+    setSelectedTemplateIds(isAllSelected ? [] : allTemplateIds)
   }
 
   const toggleFileSelection = (id: string) => {
@@ -348,11 +730,42 @@ export default function TestResults() {
     }
   }
 
+  const handleRemoveSelectedFiles = () => {
+    const selectedIds = selectedTestFileIds || []
+    if (selectedIds.length === 0) {
+      return
+    }
+
+    selectedIds.forEach((fileId) => removeFile(fileId))
+    setSelectedTestFileIds([])
+    clearFileResults()
+    setSelectedResultIndex(0)
+    setSelectedMergedResultIndex(0)
+
+    const remainingFiles = files.filter((file) => !selectedIds.includes(file.id))
+    selectFile(remainingFiles[0]?.id || null)
+  }
+
+  const toggleUploadedFileGroup = (groupId: string) => {
+    setCollapsedUploadedFileGroups((current) => ({
+      ...current,
+      [groupId]: !current[groupId]
+    }))
+  }
+
+  const toggleResultFileGroup = (fileId: string) => {
+    setCollapsedResultFileGroups((current) => ({
+      ...current,
+      [fileId]: !current[fileId]
+    }))
+  }
+
   const handleRemoveFile = (id: string) => {
     removeFile(id)
     setSelectedTestFileIds((prev) => prev?.filter((fileId) => fileId !== id) ?? null)
     clearFileResults()
     setSelectedResultIndex(0)
+    setSelectedMergedResultIndex(0)
   }
 
   const handleTest = async () => {
@@ -395,6 +808,7 @@ export default function TestResults() {
     setIsParsing(true)
     setFileResults([])
     setSelectedResultIndex(0)
+    setSelectedMergedResultIndex(0)
 
     try {
       const results: FileParseResult[] = []
@@ -451,6 +865,7 @@ export default function TestResults() {
     setInputText('')
     clearFileResults()
     setSelectedResultIndex(0)
+    setSelectedMergedResultIndex(0)
     selectFile(null)
   }
 
@@ -515,6 +930,31 @@ export default function TestResults() {
     saveAs(content, 'parse_results_checkup.zip')
   }
 
+  const handleDownloadSingleMergedJson = (group: MergedResultGroup) => {
+    const blob = new Blob([JSON.stringify(group.payload, null, 2)], { type: 'application/json' })
+    saveAs(blob, getMergedResultJsonDownloadName(group.fileName))
+  }
+
+  const handleDownloadAllMergedJson = async () => {
+    if (mergedResults.length === 0) return
+
+    if (mergedResults.length === 1) {
+      handleDownloadSingleMergedJson(mergedResults[0])
+      return
+    }
+
+    const payload = buildMergedResultsDownloadPayload(mergedResults)
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    saveAs(blob, 'parse_results_merged.json')
+  }
+
+  const handleDownloadMergedExcel = () => {
+    if (fileResults.length === 0) return
+
+    const blob = buildMergedExcelBlob(fileResults)
+    saveAs(blob, getMergedExcelDownloadName())
+  }
+
   const handleDownloadSingleConfigGenerationJson = (result: FileParseResult) => {
     if (!hasDownloadableResult(result) || !hasSavedTemplateResult(result) || !result.templateId) return
 
@@ -551,28 +991,49 @@ export default function TestResults() {
   }
 
   const currentResult = fileResults[selectedResultIndex] || fileResults[0]
+  const currentMergedResult = mergedResults[selectedMergedResultIndex] || mergedResults[0]
+  const isMergedView = resultViewMode === 'merged' && canShowMergedView
+  const currentMergedResultState = currentMergedResult ? getMergedResultState(currentMergedResult) : null
+  const totalTemplateOptions = savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)
   const successfulCount = fileResults.filter((result) => result.success).length
   const failedCount = fileResults.filter((result) => result.success === false).length
   const hasBulkJsonDownload = fileResults.some(hasDownloadableResult)
   const hasBulkCsvDownload = fileResults.some(hasDownloadableCsvResult)
   const hasBulkCheckupDownload = fileResults.some(hasDownloadableCheckupResult)
-  const hasBulkDownloads = hasBulkJsonDownload || hasBulkCsvDownload || hasBulkCheckupDownload || canDownloadConfigGeneration
+  const hasBulkMergedJsonDownload = canShowMergedView && mergedResults.length > 0
+  const hasBulkMergedExcelDownload = fileResults.length > 0
+  const hasBulkDownloads = hasBulkJsonDownload || hasBulkCsvDownload || hasBulkCheckupDownload || hasBulkMergedJsonDownload || hasBulkMergedExcelDownload || canDownloadConfigGeneration
   const hasResultJsonDownload = currentResult ? hasDownloadableResult(currentResult) : false
   const hasResultCsvDownload = currentResult ? hasDownloadableCsvResult(currentResult) : false
   const hasResultCheckupDownload = currentResult ? hasDownloadableCheckupResult(currentResult) : false
   const hasResultGenerationDownload = currentResult ? hasDownloadableResult(currentResult) && hasSavedTemplateResult(currentResult) : false
-  const hasResultDownloads = hasResultJsonDownload || hasResultCsvDownload || hasResultCheckupDownload || hasResultGenerationDownload
+  const hasMergedResultJsonDownload = Boolean(currentMergedResult)
+  const hasResultDownloads = isMergedView
+    ? hasMergedResultJsonDownload
+    : hasResultJsonDownload || hasResultCsvDownload || hasResultCheckupDownload || hasResultGenerationDownload
   const canRun = !isLoadingTemplates && selectedTemplates.length > 0 && (selectedFiles.length > 0 || (!files.length && !!inputText.trim()))
 
   return (
     <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
       <div className="page-header">
-        <h2 style={{ fontSize: '14px' }}>Test & Results</h2>
+        <div className="flex items-center gap-3 min-w-0">
+          <h2 style={{ fontSize: '14px' }}>Test & Results</h2>
+          <div
+            className="h-5 border-l border-dashed"
+            style={{ borderColor: 'var(--border-color)' }}
+          />
+          <button
+            onClick={() => setShowTemplateSelector(true)}
+            className="btn"
+          >
+            Templates
+          </button>
+          <span className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+            {selectedTemplates.length}/{totalTemplateOptions} selected
+          </span>
+        </div>
         <div className="flex gap-2 items-center">
           <div className="hidden md:flex items-center gap-2 mr-4">
-            <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-              Templates {selectedTemplates.length}/{savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)}
-            </span>
             <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
               Files {(selectedTestFileIds || []).length}/{files.length}
             </span>
@@ -652,6 +1113,30 @@ export default function TestResults() {
                       Checkup
                     </button>
                   )}
+                  {hasBulkMergedJsonDownload && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        void handleDownloadAllMergedJson()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Merged JSON
+                    </button>
+                  )}
+                  {hasBulkMergedExcelDownload && (
+                    <button
+                      onClick={() => {
+                        setShowDownloadMenu(false)
+                        handleDownloadMergedExcel()
+                      }}
+                      className="w-full text-left px-3 py-2 text-sm"
+                      style={{ color: 'var(--text-primary)' }}
+                    >
+                      Merged Excel
+                    </button>
+                  )}
                   {canDownloadConfigGeneration && (
                     <button
                       onClick={() => {
@@ -674,54 +1159,10 @@ export default function TestResults() {
       <div
         className="flex-1 grid min-h-0"
         style={{
-          gridTemplateColumns: '14rem minmax(0, 1fr) minmax(0, 1fr) 14rem',
-          gridTemplateRows: 'auto minmax(0, 1fr)'
+          gridTemplateColumns: '14rem minmax(0, 1fr) minmax(0, 1fr) 14rem'
         }}
       >
-        <div className="border-r flex flex-col row-span-2" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div className="border-b p-2 max-h-52 overflow-auto" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex items-center justify-between mb-2 px-1">
-              <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Templates</h4>
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                {selectedTemplates.length}/{savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)}
-              </span>
-            </div>
-            {currentTemplateOption && (
-              <div
-                onClick={() => toggleTemplateSelection(currentTemplateOption.id)}
-                className="mb-2 p-2 rounded-md cursor-pointer transition-colors"
-                style={{
-                  backgroundColor: selectedTemplateIds.includes(currentTemplateOption.id) ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
-                  border: selectedTemplateIds.includes(currentTemplateOption.id) ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid transparent'
-                }}
-              >
-                <div className="flex items-start gap-2">
-                  <input
-                    type="checkbox"
-                    checked={selectedTemplateIds.includes(currentTemplateOption.id)}
-                    readOnly
-                    className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{currentTemplateOption.name}</p>
-                    <p className="text-xs truncate mt-1" style={{ color: 'var(--text-muted)' }}>Unsaved current template</p>
-                  </div>
-                </div>
-              </div>
-            )}
-            <TemplateDirectoryTree
-              title="Saved Templates"
-              vendors={vendors}
-              categories={parseCategories}
-              templates={savedTemplateOptions}
-              loading={isLoadingTemplates || isLoadingTemplateDirectories}
-              emptyText="No saved templates"
-              selectedTemplateIds={selectedTemplateIds}
-              multiSelect
-              onTemplateToggle={toggleTemplateSelection}
-            />
-          </div>
-
+        <div className="border-r flex flex-col min-h-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <div
             {...getRootProps()}
             className="p-2 m-2 border-2 border-dashed rounded-lg cursor-pointer transition-colors"
@@ -736,7 +1177,7 @@ export default function TestResults() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
               </svg>
               <p className="text-sm leading-5" style={{ color: 'var(--text-secondary)' }}>
-                {isDragActive ? 'Drop files here' : 'Drop Files\nor click'}
+                {isDragActive ? 'Drop files or zip here' : 'Drop Files / Zip\nor click'}
               </p>
             </div>
           </div>
@@ -747,11 +1188,27 @@ export default function TestResults() {
               <div className="flex items-center gap-2">
                 <button
                   onClick={handleSelectAllFiles}
-                  className="text-xs"
+                  className="inline-flex items-center justify-center w-6 h-6 rounded transition-colors"
                   style={{ color: 'var(--accent-primary)' }}
                   disabled={files.length === 0}
+                  title="Select all files"
+                  aria-label="Select all files"
                 >
-                  Select All
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v2m10-4h2a2 2 0 012 2v2M9 19H7a2 2 0 01-2-2v-2m10 4h2a2 2 0 002-2v-2M8 12l2.5 2.5L16 9" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleRemoveSelectedFiles}
+                  className="inline-flex items-center justify-center w-6 h-6 rounded transition-colors"
+                  style={{ color: 'var(--error)' }}
+                  disabled={(selectedTestFileIds || []).length === 0}
+                  title="Delete selected files"
+                  aria-label="Delete selected files"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
+                  </svg>
                 </button>
                 <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
                   {(selectedTestFileIds || []).length}/{files.length}
@@ -763,8 +1220,8 @@ export default function TestResults() {
                 No files
               </p>
             ) : (
-              <div className="space-y-1">
-                {files.map((file) => {
+              <div className="space-y-0.5">
+                {directUploadedFiles.map((file) => {
                   const isSelected = (selectedTestFileIds || []).includes(file.id)
                   const isPreviewed = selectedFileId === file.id
 
@@ -772,7 +1229,7 @@ export default function TestResults() {
                     <div
                       key={file.id}
                       onClick={() => selectFile(file.id)}
-                      className="p-2 rounded-md cursor-pointer group transition-colors"
+                      className="px-2 py-1.5 rounded-md cursor-pointer group transition-colors"
                       style={{
                         backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.18)' : isPreviewed ? 'var(--bg-tertiary)' : 'transparent',
                         border: isPreviewed ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
@@ -808,22 +1265,100 @@ export default function TestResults() {
                     </div>
                   )
                 })}
+                {uploadedFileGroups.map((group) => {
+                  const isCollapsed = collapsedUploadedFileGroups[group.groupId] ?? false
+                  const selectedCount = group.files.filter((file) => (selectedTestFileIds || []).includes(file.id)).length
+                  const hasPreviewedChild = group.files.some((file) => file.id === selectedFileId)
+
+                  return (
+                    <div key={group.groupId} className="space-y-0.5">
+                      <div
+                        onClick={() => toggleUploadedFileGroup(group.groupId)}
+                        className="px-2 py-1.5 rounded-md cursor-pointer transition-colors"
+                        style={{
+                          backgroundColor: selectedCount > 0 ? 'rgba(59, 130, 246, 0.14)' : hasPreviewedChild ? 'var(--bg-tertiary)' : 'transparent',
+                          border: hasPreviewedChild ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid transparent'
+                        }}
+                        title={group.groupName}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            <ResultChevronIcon expanded={!isCollapsed} />
+                          </span>
+                          <span className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            <ResultFolderIcon />
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{group.groupName}</p>
+                            <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{selectedCount}/{group.files.length}</p>
+                          </div>
+                        </div>
+                      </div>
+                      {!isCollapsed && (
+                        <div className="space-y-0.5">
+                          {group.files.map((file) => {
+                            const isSelected = (selectedTestFileIds || []).includes(file.id)
+                            const isPreviewed = selectedFileId === file.id
+
+                            return (
+                              <div
+                                key={file.id}
+                                onClick={() => selectFile(file.id)}
+                                className="ml-3 px-2 py-1 rounded-md cursor-pointer group transition-colors"
+                                style={{
+                                  backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.18)' : isPreviewed ? 'var(--bg-tertiary)' : 'transparent',
+                                  border: isPreviewed ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
+                                }}
+                                title={file.name}
+                              >
+                                <div className="flex items-start gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => toggleFileSelection(file.id)}
+                                    onClick={(event) => event.stopPropagation()}
+                                    className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{file.name}</p>
+                                    <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{formatFileSize(file.size)}</p>
+                                  </div>
+                                  <button
+                                    onClick={(event) => {
+                                      event.stopPropagation()
+                                      handleRemoveFile(file.id)
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                                    style={{ color: 'var(--text-muted)' }}
+                                    title="Remove file"
+                                  >
+                                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
         </div>
 
-        <div className="border-r flex flex-col min-w-0 row-span-2" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
-          <div className="px-4 py-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Config Preview</h3>
-                <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                  {previewFile ? previewFile.name : 'Click a file to preview'}
-                </p>
-              </div>
+        <div className="border-r flex flex-col min-w-0 min-h-0" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
+          <div className="h-11 px-4 border-b flex items-center" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="flex items-center gap-3 min-w-0 w-full">
+              <h3 className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Config Preview</h3>
+              <span className="text-sm truncate" style={{ color: 'var(--text-secondary)' }}>
+                {previewFile ? previewFile.name : 'Click a file to preview'}
+              </span>
               {previewFile && (
-                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                <span className="text-sm whitespace-nowrap ml-auto" style={{ color: 'var(--text-muted)' }}>
                   {formatFileSize(previewFile.size)}
                 </span>
               )}
@@ -848,33 +1383,58 @@ export default function TestResults() {
           </div>
         </div>
 
-        <div className="col-span-2 px-4 py-2 border-b flex items-center gap-4 min-w-0" style={{ borderColor: 'var(--border-color)' }}>
-          <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Results:</span>
-          {fileResults.length > 0 ? (
-            <>
-              {successfulCount > 0 && (
-                <span className="text-sm flex items-center gap-1" style={{ color: '#22c55e' }}>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  {successfulCount} OK
-                </span>
-              )}
-              {failedCount > 0 && (
-                <span className="text-sm flex items-center gap-1" style={{ color: '#ef4444' }}>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  {failedCount} Failed
-                </span>
-              )}
-            </>
-          ) : (
-            <span className="text-sm" style={{ color: 'var(--text-muted)' }}>No results yet</span>
-          )}
-        </div>
+        <div className="flex flex-col min-w-0 min-h-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          <div className="h-11 px-4 border-b flex items-center gap-4 min-w-0" style={{ borderColor: 'var(--border-color)' }}>
+            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Results:</span>
+            {fileResults.length > 0 ? (
+              <>
+                {successfulCount > 0 && (
+                  <span className="text-sm flex items-center gap-1" style={{ color: '#22c55e' }}>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                    </svg>
+                    {successfulCount} OK
+                  </span>
+                )}
+                {failedCount > 0 && (
+                  <span className="text-sm flex items-center gap-1" style={{ color: '#ef4444' }}>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                    {failedCount} Failed
+                  </span>
+                )}
+                {canShowMergedView && (
+                  <div className="ml-auto inline-flex rounded-md border overflow-hidden" style={{ borderColor: 'var(--border-color)' }}>
+                    <button
+                      onClick={() => setResultViewMode('individual')}
+                      className="px-3 py-1 text-sm transition-colors"
+                      style={{
+                        backgroundColor: !isMergedView ? 'rgba(59, 130, 246, 0.16)' : 'transparent',
+                        color: !isMergedView ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                      }}
+                    >
+                      Individual
+                    </button>
+                    <button
+                      onClick={() => setResultViewMode('merged')}
+                      className="px-3 py-1 text-sm transition-colors"
+                      style={{
+                        backgroundColor: isMergedView ? 'rgba(59, 130, 246, 0.16)' : 'transparent',
+                        color: isMergedView ? 'var(--accent-primary)' : 'var(--text-secondary)'
+                      }}
+                    >
+                      Merged
+                    </button>
+                  </div>
+                )}
+              </>
+            ) : (
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>No results yet</span>
+            )}
+          </div>
 
-        <div className="overflow-auto p-4 min-w-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
+          <div className="flex-1 overflow-auto p-4 min-w-0">
           {!fileResults.length ? (
             <div className="h-full flex items-center justify-center">
               <div className="text-center" style={{ color: 'var(--text-muted)' }}>
@@ -889,6 +1449,96 @@ export default function TestResults() {
                 {selectedTemplates.length === 0 && (
                   <p className="text-sm mt-4" style={{ color: 'var(--error)' }}>No template selected</p>
                 )}
+              </div>
+            </div>
+          ) : isMergedView && currentMergedResult ? (
+            <div>
+              <div
+                className="mb-4 p-3 rounded-lg flex items-center gap-2"
+                style={{
+                  backgroundColor:
+                    currentMergedResultState === 'success'
+                      ? theme === 'dark' ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)'
+                      : currentMergedResultState === 'error'
+                        ? theme === 'dark' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(239, 68, 68, 0.1)'
+                        : theme === 'dark' ? 'rgba(245, 158, 11, 0.16)' : 'rgba(245, 158, 11, 0.12)',
+                  border:
+                    currentMergedResultState === 'success'
+                      ? '1px solid rgba(34, 197, 94, 0.3)'
+                      : currentMergedResultState === 'error'
+                        ? '1px solid rgba(239, 68, 68, 0.3)'
+                        : '1px solid rgba(245, 158, 11, 0.35)'
+                }}
+              >
+                {currentMergedResultState === 'success' ? (
+                  <svg className="w-5 h-5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                ) : currentMergedResultState === 'error' ? (
+                  <svg className="w-5 h-5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                ) : (
+                  <svg className="w-5 h-5" style={{ color: '#f59e0b' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z" />
+                  </svg>
+                )}
+                <span
+                  className="font-medium"
+                  style={{
+                    color:
+                      currentMergedResultState === 'success'
+                        ? '#22c55e'
+                        : currentMergedResultState === 'error'
+                          ? '#ef4444'
+                          : '#f59e0b'
+                  }}
+                >
+                  Merged results
+                </span>
+                <span className="text-sm ml-auto mr-2 truncate" style={{ color: 'var(--text-muted)' }}>
+                  {currentMergedResult.fileName}
+                </span>
+                {hasResultDownloads && (
+                  <div className="relative" ref={resultDownloadMenuRef}>
+                    <button
+                      onClick={() => setShowResultDownloadMenu((current) => !current)}
+                      className="btn text-sm flex items-center gap-1"
+                    >
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+                    {showResultDownloadMenu && (
+                      <div
+                        className="absolute right-0 mt-2 min-w-40 rounded-md border shadow-lg z-20 overflow-hidden"
+                        style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                      >
+                        {hasMergedResultJsonDownload && (
+                          <button
+                            onClick={() => {
+                              setShowResultDownloadMenu(false)
+                              handleDownloadSingleMergedJson(currentMergedResult)
+                            }}
+                            className="w-full text-left px-3 py-2 text-sm"
+                            style={{ color: 'var(--text-primary)' }}
+                          >
+                            JSON
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: theme === 'dark' ? '#1e1e2e' : '#f8fafc', border: `1px solid ${theme === 'dark' ? '#313244' : '#e2e8f0'}` }}>
+                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: theme === 'dark' ? '#cdd6f4' : '#1e293b' }}>
+                  {JSON.stringify(currentMergedResult.payload, null, 2)}
+                </pre>
               </div>
             </div>
           ) : currentResult?.success ? (
@@ -1003,49 +1653,222 @@ export default function TestResults() {
             </div>
           )}
         </div>
+        </div>
 
-        <div className="border-l overflow-auto" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
+        <div className="border-l overflow-auto min-h-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <div className="p-2 h-full">
             {fileResults.length === 0 ? (
               <div className="h-full flex items-center justify-center text-center px-2" style={{ color: 'var(--text-muted)' }}>
                 <p className="text-sm">No result items</p>
               </div>
-            ) : (
-              <div className="space-y-1">
-                {fileResults.map((result, index) => (
-                  <div
-                    key={`${result.fileId}-${result.templateId || 'template'}-${index}`}
-                    onClick={() => setSelectedResultIndex(index)}
-                    className="p-2 rounded-md cursor-pointer transition-colors"
-                    style={{
-                      backgroundColor: selectedResultIndex === index ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-                      border: selectedResultIndex === index ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
-                    }}
-                  >
-                    <div className="flex items-start gap-2">
-                      {result.success ? (
-                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                        </svg>
-                      ) : (
-                        <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{result.fileName}</p>
-                        {result.templateName && (
-                          <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{result.templateName}</p>
+            ) : isMergedView ? (
+              <div className="space-y-0.5">
+                {mergedResults.map((group, index) => {
+                  const groupState = getMergedResultState(group)
+
+                  return (
+                    <div
+                      key={`${group.fileId}-${index}`}
+                      onClick={() => setSelectedMergedResultIndex(index)}
+                      className="px-2 py-1.5 rounded-md cursor-pointer transition-colors"
+                      style={{
+                        backgroundColor: selectedMergedResultIndex === index ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                        border: selectedMergedResultIndex === index ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
+                      }}
+                    >
+                      <div className="flex items-start gap-2">
+                        {groupState === 'success' ? (
+                          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        ) : groupState === 'error' ? (
+                          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        ) : (
+                          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#f59e0b' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M4.93 19h14.14c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.2 16c-.77 1.33.19 3 1.73 3z" />
+                          </svg>
                         )}
+                        <div className="min-w-0 flex-1">
+                          <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{group.fileName}</p>
+                          <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+                            {group.successfulCount} OK · {group.failedCount} Failed · {group.results.length} Templates
+                          </p>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="space-y-0.5">
+                {individualResultGroups.map((group) => {
+                  const isCollapsed = collapsedResultFileGroups[group.fileId] ?? false
+                  const hasSelectedChild = group.items.some((item) => item.index === selectedResultIndex)
+
+                  return (
+                    <div key={group.fileId} className="space-y-0.5">
+                      <div
+                        onClick={() => toggleResultFileGroup(group.fileId)}
+                        className="px-2 py-1.5 rounded-md cursor-pointer transition-colors"
+                        style={{
+                          backgroundColor: hasSelectedChild ? 'rgba(59, 130, 246, 0.14)' : 'transparent',
+                          border: hasSelectedChild ? '1px solid rgba(59, 130, 246, 0.35)' : '1px solid transparent'
+                        }}
+                      >
+                        <div className="flex items-start gap-2">
+                          <span className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            <ResultChevronIcon expanded={!isCollapsed} />
+                          </span>
+                          <span className="mt-0.5" style={{ color: 'var(--text-muted)' }}>
+                            <ResultFolderIcon />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>{group.fileName}</p>
+                            <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+                              {group.successfulCount} OK · {group.failedCount} Failed
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      {!isCollapsed && (
+                        <div className="space-y-0.5">
+                          {group.items.map(({ result, index }) => (
+                            <div
+                              key={`${result.fileId}-${result.templateId || 'template'}-${index}`}
+                              onClick={() => setSelectedResultIndex(index)}
+                              className="ml-3 px-2 py-1 rounded-md cursor-pointer transition-colors"
+                              style={{
+                                backgroundColor: selectedResultIndex === index ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
+                                border: selectedResultIndex === index ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
+                              }}
+                            >
+                              <div className="flex items-start gap-2">
+                                {result.success ? (
+                                  <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                  </svg>
+                                ) : (
+                                  <svg className="w-4 h-4 flex-shrink-0 mt-0.5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="text-sm font-medium truncate" style={{ color: 'var(--text-primary)' }}>
+                                    {result.templateName || 'Result'}
+                                  </p>
+                                  <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+                                    {result.success ? 'OK' : 'Failed'}
+                                  </p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
               </div>
             )}
           </div>
         </div>
       </div>
+
+      {showTemplateSelector && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4"
+          style={{ backgroundColor: 'rgba(0, 0, 0, 0.45)' }}
+          onClick={() => setShowTemplateSelector(false)}
+        >
+          <div
+            className="w-full max-w-xl max-h-[85vh] rounded-lg border shadow-xl overflow-hidden flex flex-col"
+            style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="px-4 py-3 border-b flex items-center gap-3" style={{ borderColor: 'var(--border-color)' }}>
+              <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Templates</h3>
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                {selectedTemplates.length}/{totalTemplateOptions} selected
+              </span>
+              <button
+                onClick={handleSelectAllTemplates}
+                className="inline-flex items-center justify-center w-6 h-6 rounded transition-colors"
+                style={{ color: 'var(--accent-primary)' }}
+                disabled={totalTemplateOptions === 0}
+                title="Select all templates"
+                aria-label="Select all templates"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v2m10-4h2a2 2 0 012 2v2M9 19H7a2 2 0 01-2-2v-2m10 4h2a2 2 0 002-2v-2M8 12l2.5 2.5L16 9" />
+                </svg>
+              </button>
+              <button
+                onClick={() => setShowTemplateSelector(false)}
+                className="ml-auto inline-flex items-center justify-center w-7 h-7 rounded transition-colors"
+                style={{ color: 'var(--text-muted)' }}
+                title="Close"
+                aria-label="Close"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-auto p-4">
+              {currentTemplateOption && (
+                <div
+                  onClick={() => toggleTemplateSelection(currentTemplateOption.id)}
+                  className="mb-2 p-2 rounded-md cursor-pointer transition-colors"
+                  style={{
+                    backgroundColor: selectedTemplateIds.includes(currentTemplateOption.id) ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
+                    border: selectedTemplateIds.includes(currentTemplateOption.id) ? '1px solid rgba(59, 130, 246, 0.45)' : '1px solid transparent'
+                  }}
+                >
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedTemplateIds.includes(currentTemplateOption.id)}
+                      readOnly
+                      className="h-3.5 w-3.5 accent-blue-500"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{currentTemplateOption.name}</p>
+                      <p className="text-xs truncate mt-0.5" style={{ color: 'var(--text-muted)' }}>Unsaved current template</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <TemplateDirectoryTree
+                title=""
+                vendors={vendors}
+                categories={parseCategories}
+                templates={savedTemplateOptions}
+                loading={isLoadingTemplates || isLoadingTemplateDirectories}
+                emptyText="No saved templates"
+                selectedTemplateIds={selectedTemplateIds}
+                multiSelect
+                onTemplateToggle={toggleTemplateSelection}
+              />
+            </div>
+
+            <div className="px-4 py-3 border-t flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-color)' }}>
+              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                Selection is saved automatically.
+              </span>
+              <button
+                onClick={() => setShowTemplateSelector(false)}
+                className="btn"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

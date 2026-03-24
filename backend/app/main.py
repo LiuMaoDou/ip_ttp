@@ -7,8 +7,8 @@ from .services.generation_service import GenerationTemplateService
 from .services.template_service import TemplateService
 
 app = FastAPI(
-    title="TTP Web API",
-    description="Backend API for TTP (Template Text Parser) Web UI",
+    title="mini-IPMaster API",
+    description="Backend API for mini-IPMaster",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
@@ -46,7 +46,7 @@ async def initialize_template_storage():
 async def root():
     """Root endpoint - API info."""
     return {
-        "name": "TTP Web API",
+        "name": "mini-IPMaster API",
         "version": "1.0.0",
         "docs": "/docs"
     }

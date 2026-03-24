@@ -709,7 +709,7 @@ export default function ConfigGeneration() {
       )}
       <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
         <div className="page-header">
-        <h2>Config Generation</h2>
+        <h2>Config Generation (Not Ready)</h2>
         <div className="flex gap-2 items-center">
           <label className="btn cursor-pointer">
             Upload Template

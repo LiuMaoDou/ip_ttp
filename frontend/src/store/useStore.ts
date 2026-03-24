@@ -93,6 +93,8 @@ export interface UploadedFile {
   name: string
   size: number
   content: string
+  uploadGroupId?: string
+  uploadGroupName?: string
 }
 
 export interface FileParseResult {

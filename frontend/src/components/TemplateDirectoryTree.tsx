@@ -342,7 +342,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
         }}
       >
         <div
-          className="flex items-start gap-2 p-2 cursor-pointer"
+          className="flex items-center gap-2 px-2 py-1.5 cursor-pointer"
           onClick={() => {
             if (multiSelect) {
               onTemplateToggle?.(template.id)
@@ -356,7 +356,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
               type="checkbox"
               checked={isSelected}
               readOnly
-              className="mt-0.5 h-3.5 w-3.5 accent-blue-500"
+              className="h-3.5 w-3.5 accent-blue-500"
             />
           )}
           <span style={{ color: 'var(--text-muted)' }}>
@@ -397,9 +397,9 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
     const isCollapsed = collapsedCategories[category.id] ?? false
 
     return (
-      <div key={category.id} className="space-y-1">
+      <div key={category.id} className="space-y-0.5">
         <div
-          className="flex items-center justify-between gap-2"
+          className="flex items-center justify-between gap-2 px-1 py-0.5"
           style={{ marginLeft: `${depth * 12}px` }}
           onClick={() => {
             if (hasChildren) {
@@ -445,20 +445,26 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
 
   return (
     <div className="p-2">
-      <div className="flex items-center justify-between gap-2 mb-2 px-1">
-        <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>{title}</h3>
-        {manageDirectories && onCreateVendor && (
-          <IconButton title="Add vendor" color="var(--accent-primary)" onClick={() => { void handlePromptCreateVendor() }}>
-            <AddIcon />
-          </IconButton>
-        )}
-      </div>
+      {(title || (manageDirectories && onCreateVendor)) && (
+        <div className="flex items-center justify-between gap-2 mb-2 px-1">
+          {title ? (
+            <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>{title}</h3>
+          ) : (
+            <div />
+          )}
+          {manageDirectories && onCreateVendor && (
+            <IconButton title="Add vendor" color="var(--accent-primary)" onClick={() => { void handlePromptCreateVendor() }}>
+              <AddIcon />
+            </IconButton>
+          )}
+        </div>
+      )}
       {loading ? (
         <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>Loading...</p>
       ) : vendorNames.length === 0 && templates.length === 0 ? (
         <p className="text-xs px-2 py-4 text-center" style={{ color: 'var(--text-muted)' }}>{emptyText}</p>
       ) : (
-        <div className="space-y-3">
+        <div className="space-y-1">
           {vendorNames.map((vendor) => {
             const rootTemplates = (templatesByVendor.get(vendor) || [])
               .filter((template) => template.categoryPath.length === 0)
@@ -470,9 +476,9 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
               return null
             }
             return (
-              <div key={vendor} className="space-y-1">
+              <div key={vendor} className="space-y-0.5">
                 <div
-                  className="flex items-center justify-between gap-2"
+                  className="flex items-center justify-between gap-2 px-1 py-0.5"
                   onClick={() => {
                     if (hasContent) {
                       toggleVendorCollapsed(vendor)
