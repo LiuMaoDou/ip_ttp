@@ -52,6 +52,8 @@ interface DisplayResultItem {
   checkupCsvResult?: string
 }
 
+type ResultViewSource = 'batch' | 'quick'
+
 const TEST_RESULTS_SELECTED_TEMPLATE_IDS_STORAGE_KEY = 'ttp-test-results-selected-template-ids'
 const TEST_RESULTS_LAST_JOB_ID_STORAGE_KEY = 'ttp-test-results-last-job-id'
 const RESULTS_PAGE_SIZE = 50
@@ -213,6 +215,7 @@ export default function TestResults() {
   const [showTemplateSelector, setShowTemplateSelector] = useState(false)
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const [quickParseResults, setQuickParseResults] = useState<QuickParseItem[]>([])
+  const [activeResultSource, setActiveResultSource] = useState<ResultViewSource>('batch')
   const [isQuickParsing, setIsQuickParsing] = useState(false)
   const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null)
   const [uploadPreviewContent, setUploadPreviewContent] = useState('')
@@ -300,6 +303,7 @@ export default function TestResults() {
     try {
       const job = await getBatchParseJob(jobId)
       setBatchJob(job)
+      setActiveResultSource('batch')
       if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
         const page = await getBatchParseResultsPage(job.id, 0, RESULTS_PAGE_SIZE)
         setBatchResultsPage(page)
@@ -476,6 +480,7 @@ export default function TestResults() {
     setBatchResultsPage(null)
     setBatchResultsOffset(0)
     setQuickParseResults([])
+    setActiveResultSource('batch')
 
     try {
       const job = await createBatchParseJob(batchTemplates, uploads.map((upload) => upload.file), {
@@ -502,6 +507,7 @@ export default function TestResults() {
       const page = await getBatchParseResultsPage(batchJob.id, nextOffset, RESULTS_PAGE_SIZE)
       setBatchResultsPage(page)
       setBatchResultsOffset(nextOffset)
+      setActiveResultSource('batch')
       setBatchError(null)
     } catch (error) {
       setBatchError(error instanceof Error ? error.message : 'Failed to load batch results')
@@ -552,6 +558,7 @@ export default function TestResults() {
         })
       }
       setQuickParseResults(results)
+      setActiveResultSource('quick')
     } catch (error) {
       setBatchError(error instanceof Error ? error.message : 'Quick parse failed')
     } finally {
@@ -611,8 +618,23 @@ export default function TestResults() {
     ? batchResultsOffset + batchResultsPage.items.length < batchResultsPage.total
     : false
   const totalTemplateOptions = savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)
-  const displayResults = useMemo<DisplayResultItem[]>(() => {
-    const batchItems = rawBatchResults.map((item, index) => ({
+  const quickItems = useMemo<DisplayResultItem[]>(() => (
+    quickParseResults.map((item) => ({
+      key: `quick-${item.templateId}`,
+      source: 'quick' as const,
+      templateName: item.templateName,
+      fileName: 'Manual Input',
+      success: item.result.success,
+      error: item.result.error,
+      errorType: item.result.errorType,
+      result: item.result.result,
+      csvResult: item.result.csvResult,
+      checkupCsvResult: item.result.checkupCsvResult
+    }))
+  ), [quickParseResults])
+
+  const batchItems = useMemo<DisplayResultItem[]>(() => (
+    rawBatchResults.map((item, index) => ({
       key: `batch-${String(item.template_id || item.template_name || item.templateName || 'template')}-${String(item.file_name || item.fileName || index)}`,
       source: 'batch' as const,
       templateName: String(item.template_name || item.templateName || '-'),
@@ -628,24 +650,19 @@ export default function TestResults() {
           ? item.checkupCsvResult
           : undefined
     }))
+  ), [rawBatchResults])
+
+  const displayResults = useMemo<DisplayResultItem[]>(() => {
+    if (activeResultSource === 'quick' && quickItems.length > 0) {
+      return quickItems
+    }
 
     if (batchItems.length > 0) {
       return batchItems
     }
 
-    return quickParseResults.map((item) => ({
-      key: `quick-${item.templateId}`,
-      source: 'quick' as const,
-      templateName: item.templateName,
-      fileName: 'Manual Input',
-      success: item.result.success,
-      error: item.result.error,
-      errorType: item.result.errorType,
-      result: item.result.result,
-      csvResult: item.result.csvResult,
-      checkupCsvResult: item.result.checkupCsvResult
-    }))
-  }, [quickParseResults, rawBatchResults])
+    return quickItems
+  }, [activeResultSource, batchItems, quickItems])
 
   useEffect(() => {
     if (displayResults.length === 0) {
