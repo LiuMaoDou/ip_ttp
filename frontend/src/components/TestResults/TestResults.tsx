@@ -635,11 +635,13 @@ export default function TestResults() {
 
   const batchItems = useMemo<DisplayResultItem[]>(() => (
     rawBatchResults.map((item, index) => ({
-      key: `batch-${String(item.template_id || item.template_name || item.templateName || 'template')}-${String(item.file_name || item.fileName || index)}`,
+      key: `batch-${String(item.file_name || item.fileName || index)}`,
       source: 'batch' as const,
       templateName: String(item.template_name || item.templateName || '-'),
       fileName: String(item.file_name || item.fileName || '-'),
-      success: Boolean(item.success),
+      success: typeof item.success === 'boolean'
+        ? item.success
+        : item.result !== null && item.result !== undefined,
       error: item.error ? String(item.error) : undefined,
       errorType: item.error_type ? String(item.error_type) : item.errorType ? String(item.errorType) : undefined,
       result: item.result,

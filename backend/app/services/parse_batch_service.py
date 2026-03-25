@@ -662,7 +662,11 @@ class ParseBatchService:
                 ]
 
             for item in items:
-                results_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+                compact_result = {
+                    "file_name": item["file_name"],
+                    "result": item.get("result"),
+                }
+                results_handle.write(json.dumps(compact_result, ensure_ascii=False) + "\n")
                 if not item["success"]:
                     errors_handle.write(
                         json.dumps(
