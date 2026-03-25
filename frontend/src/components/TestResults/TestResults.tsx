@@ -4,6 +4,7 @@ import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import { formatFileSize } from '../../utils'
 import { useStore } from '../../store/useStore'
 import {
+  cancelBatchParseJob,
   createBatchParseJob,
   getBatchParseJob,
   getBatchParseResultsPage,
@@ -145,6 +146,10 @@ function getActiveProgressPercent(job: BatchParseJob | null, isSubmittingBatch: 
     return getProgressPercent(job)
   }
 
+  if (job.status === 'cancel_requested' || job.status === 'cancelled') {
+    return getProgressPercent(job)
+  }
+
   return 0
 }
 
@@ -154,6 +159,10 @@ function getStatusTone(status?: BatchParseJob['status']): { label: string; color
       return { label: 'Completed', color: '#15803d', bg: 'rgba(34, 197, 94, 0.12)' }
     case 'failed':
       return { label: 'Failed', color: '#b91c1c', bg: 'rgba(239, 68, 68, 0.12)' }
+    case 'cancelled':
+      return { label: 'Cancelled', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.16)' }
+    case 'cancel_requested':
+      return { label: 'Stopping', color: '#b45309', bg: 'rgba(245, 158, 11, 0.16)' }
     case 'parsing':
       return { label: 'Parsing', color: '#1d4ed8', bg: 'rgba(59, 130, 246, 0.12)' }
     case 'scanning':
@@ -195,6 +204,7 @@ export default function TestResults() {
   const [uploads, setUploads] = useState<UploadedBatchFile[]>([])
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>(() => loadStoredSelectedTemplateIds())
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
+  const [isCancellingBatch, setIsCancellingBatch] = useState(false)
   const [uploadProgressPercent, setUploadProgressPercent] = useState(0)
   const [batchJob, setBatchJob] = useState<BatchParseJob | null>(null)
   const [batchResultsPage, setBatchResultsPage] = useState<BatchParseResultsPage | null>(null)
@@ -290,7 +300,7 @@ export default function TestResults() {
     try {
       const job = await getBatchParseJob(jobId)
       setBatchJob(job)
-      if (job.status === 'completed' || job.status === 'failed') {
+      if (job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') {
         const page = await getBatchParseResultsPage(job.id, 0, RESULTS_PAGE_SIZE)
         setBatchResultsPage(page)
         setBatchResultsOffset(0)
@@ -311,7 +321,7 @@ export default function TestResults() {
   }, [restoreJob])
 
   useEffect(() => {
-    if (!batchJob || (batchJob.status !== 'queued' && batchJob.status !== 'scanning' && batchJob.status !== 'parsing')) {
+    if (!batchJob || (batchJob.status !== 'queued' && batchJob.status !== 'scanning' && batchJob.status !== 'parsing' && batchJob.status !== 'cancel_requested')) {
       return
     }
 
@@ -320,7 +330,7 @@ export default function TestResults() {
         try {
           const refreshed = await getBatchParseJob(batchJob.id)
           setBatchJob(refreshed)
-          if (refreshed.status === 'completed' || refreshed.status === 'failed') {
+          if (refreshed.status === 'completed' || refreshed.status === 'failed' || refreshed.status === 'cancelled') {
             const page = await getBatchParseResultsPage(refreshed.id, 0, RESULTS_PAGE_SIZE)
             setBatchResultsPage(page)
             setBatchResultsOffset(0)
@@ -498,6 +508,24 @@ export default function TestResults() {
     }
   }
 
+  const handleCancelBatch = async () => {
+    if (!batchJob || batchJob.status === 'cancel_requested') {
+      return
+    }
+
+    setIsCancellingBatch(true)
+    setBatchError(null)
+
+    try {
+      const job = await cancelBatchParseJob(batchJob.id)
+      setBatchJob(job)
+    } catch (error) {
+      setBatchError(error instanceof Error ? error.message : 'Failed to stop batch parse job')
+    } finally {
+      setIsCancellingBatch(false)
+    }
+  }
+
   const handleQuickParse = async () => {
     if (batchTemplates.length === 0) {
       setBatchError('Please select at least one template.')
@@ -532,10 +560,18 @@ export default function TestResults() {
   }
 
   const statusTone = getStatusTone(batchJob?.status)
+  const canCancelBatch = Boolean(
+    batchJob &&
+    (batchJob.status === 'queued' || batchJob.status === 'scanning' || batchJob.status === 'parsing')
+  )
   const activeProgressPercent = getActiveProgressPercent(batchJob, isSubmittingBatch, uploadProgressPercent)
   const showProgressStrip = isSubmittingBatch || Boolean(batchJob)
   const progressTone = isSubmittingBatch
     ? { color: '#1d4ed8', bg: 'rgba(59, 130, 246, 0.16)' }
+    : batchJob?.status === 'cancel_requested'
+      ? { color: '#b45309', bg: 'rgba(245, 158, 11, 0.16)' }
+      : batchJob?.status === 'cancelled'
+        ? { color: '#6b7280', bg: 'rgba(107, 114, 128, 0.16)' }
     : batchJob?.status === 'failed'
       ? { color: '#b91c1c', bg: 'rgba(239, 68, 68, 0.16)' }
       : batchJob?.status === 'completed'
@@ -558,6 +594,10 @@ export default function TestResults() {
         }`
       : batchJob && batchJob.status === 'parsing'
         ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · ${batchJob.discoveredFileCount} discovered files`
+        : batchJob && batchJob.status === 'cancel_requested'
+          ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · waiting for in-flight work to stop`
+          : batchJob && batchJob.status === 'cancelled'
+            ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed before cancellation`
         : batchJob && batchJob.status === 'completed'
           ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · ${batchJob.successCount} succeeded · ${batchJob.failureCount} failed`
           : batchJob && batchJob.status === 'failed'
@@ -667,6 +707,13 @@ export default function TestResults() {
             className="btn"
           >
             {isSubmittingBatch ? 'Submitting...' : 'Start Batch'}
+          </button>
+          <button
+            onClick={handleCancelBatch}
+            disabled={!canCancelBatch || isCancellingBatch}
+            className="btn"
+          >
+            {isCancellingBatch || batchJob?.status === 'cancel_requested' ? 'Stopping...' : 'Stop Batch'}
           </button>
           {hasDownloads && (
             <div className="relative">

@@ -180,6 +180,16 @@ async def get_batch_parse_job(job_id: str):
     return BatchParseJobResponse(**job)
 
 
+@router.post("/parse/batch/jobs/{job_id}/cancel", response_model=BatchParseJobResponse)
+async def cancel_batch_parse_job(job_id: str):
+    """Request cancellation for a batch parse job."""
+    try:
+        job = ParseBatchService.cancel_job(job_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="Batch parse job not found") from exc
+    return BatchParseJobResponse(**job)
+
+
 @router.get("/parse/batch/jobs/{job_id}/results", response_model=BatchParseResultsPageResponse)
 async def get_batch_parse_results(
     job_id: str,

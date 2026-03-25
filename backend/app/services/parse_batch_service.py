@@ -10,7 +10,8 @@ import tempfile
 import traceback
 import uuid
 import zipfile
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, ThreadPoolExecutor, wait
+from multiprocessing import get_context
 from pathlib import Path
 from typing import Any
 
@@ -35,9 +36,10 @@ SUPPORTED_EXTENSIONS = {".txt", ".log", ".cfg", ".conf", ".json", ".xml", ".yaml
 RESULTS_PAGE_DEFAULT = 50
 RESULTS_PAGE_MAX = 200
 RESULTS_PREVIEW_LIMIT = 100
+EXECUTOR_KIND = (os.getenv("TTP_BATCH_EXECUTOR") or "process").strip().lower()
 MAX_PARSE_WORKERS = _env_int(
     "TTP_BATCH_MAX_WORKERS",
-    min(12, max(4, os.cpu_count() or 4)),
+    min(32, max(4, os.cpu_count() or 4)),
 )
 MAX_PENDING_FUTURES = _env_int(
     "TTP_BATCH_MAX_PENDING_FUTURES",
@@ -79,6 +81,38 @@ def _is_supported_path(path: str) -> bool:
     return suffix in SUPPORTED_EXTENSIONS
 
 
+def _safe_relative_path(path: str, fallback_prefix: str) -> Path:
+    """Normalize an archive entry path into a safe relative path."""
+    candidate = Path(path.replace("\\", "/"))
+    safe_parts = [
+        _safe_name(part, fallback_prefix)
+        for part in candidate.parts
+        if part not in {"", ".", ".."}
+    ]
+    if not safe_parts:
+        safe_parts = [fallback_prefix]
+    return Path(*safe_parts)
+
+
+def _work_item_display_name(work_item: dict[str, Any]) -> str:
+    """Return a stable display name for a plain file or archive entry."""
+    if work_item["kind"] == "plain_file":
+        return work_item["file_name"]
+    return f"{work_item['archive_name']}::{work_item['entry_name']}"
+
+
+def _load_work_item_text_payload(work_item: dict[str, Any]) -> tuple[str, str]:
+    """Load text content and display name for a serializable work item."""
+    if work_item["kind"] == "plain_file":
+        content = Path(work_item["path"]).read_bytes()
+        return work_item["file_name"], _decode_text_bytes(content)
+
+    archive_path = Path(work_item["archive_path"])
+    with zipfile.ZipFile(archive_path) as archive:
+        content = archive.read(work_item["entry_name"])
+    return _work_item_display_name(work_item), _decode_text_bytes(content)
+
+
 def _parse_task(
     file_name: str,
     template_id: str,
@@ -108,6 +142,24 @@ def _parse_task(
         "started_at": started_at,
         "finished_at": finished_at,
     }
+
+
+def _parse_work_item(
+    work_item: dict[str, Any],
+    templates: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """Load one work item and parse it against all selected templates."""
+    file_name, data = _load_work_item_text_payload(work_item)
+    return [
+        _parse_task(
+            file_name=file_name,
+            template_id=template["id"],
+            template_name=template["name"],
+            template_text=template["template"],
+            data=data,
+        )
+        for template in templates
+    ]
 
 
 class ParseBatchService:
@@ -153,6 +205,10 @@ class ParseBatchService:
         return cls._job_dir(job_id, root_path) / "summary.json"
 
     @classmethod
+    def _extracted_dir(cls, job_id: str, root_path: str | Path | None = None) -> Path:
+        return cls._job_dir(job_id, root_path) / "extracted"
+
+    @classmethod
     def _load_state(cls, job_id: str, root_path: str | Path | None = None) -> dict[str, Any]:
         state_path = cls._state_path(job_id, root_path)
         if not state_path.exists():
@@ -168,7 +224,9 @@ class ParseBatchService:
     ) -> None:
         state["updated_at"] = _current_timestamp()
         state_path = cls._state_path(job_id, root_path)
-        state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_state_path = state_path.with_suffix(".tmp")
+        temp_state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_state_path.replace(state_path)
 
     @classmethod
     async def create_job(
@@ -225,6 +283,7 @@ class ParseBatchService:
         state = {
             "id": job_id,
             "status": "queued",
+            "cancel_requested": False,
             "phase_message": "Waiting for background worker",
             "created_at": _current_timestamp(),
             "updated_at": _current_timestamp(),
@@ -277,6 +336,7 @@ class ParseBatchService:
         state = cls._load_state(job_id, root_path)
         if state.get("status") == "running":
             state["status"] = "parsing"
+        state.setdefault("cancel_requested", False)
         state.setdefault("phase_message", "Batch job state loaded")
         state.setdefault("scanned_uploads", 0)
         state.setdefault("total_uploads", state.get("upload_count", 0))
@@ -291,6 +351,19 @@ class ParseBatchService:
             for key in state["artifacts"]
         }
         return state
+
+    @classmethod
+    def cancel_job(cls, job_id: str, root_path: str | Path | None = None) -> dict[str, Any]:
+        """Request cancellation for a running batch parse job."""
+        state = cls._load_state(job_id, root_path)
+        if cls._is_terminal_status(state.get("status")):
+            return cls.get_job(job_id, root_path)
+
+        state["cancel_requested"] = True
+        state["status"] = "cancel_requested"
+        state["phase_message"] = "Stopping batch job"
+        cls._write_state(job_id, state, root_path)
+        return cls.get_job(job_id, root_path)
 
     @classmethod
     def get_results_page(
@@ -348,6 +421,11 @@ class ParseBatchService:
             state["preview_results"].append(item)
 
     @classmethod
+    def _is_terminal_status(cls, status: str | None) -> bool:
+        """Return True when a job status is terminal."""
+        return status in {"completed", "failed", "cancelled"}
+
+    @classmethod
     def _update_state_fields(
         cls,
         job_id: str,
@@ -374,6 +452,7 @@ class ParseBatchService:
         processed_archive_entries = 0
         scanned_uploads = 0
         last_flush_at = 0
+        extracted_dir = cls._extracted_dir(job_id, root_path)
 
         def flush_progress(force: bool = False) -> None:
             nonlocal last_flush_at
@@ -395,6 +474,8 @@ class ParseBatchService:
             last_flush_at = now
 
         for upload in uploads:
+            if cls._refresh_cancel_requested(job_id, state, root_path):
+                break
             upload_path = Path(upload["path"])
             if upload["is_archive"]:
                 with zipfile.ZipFile(upload_path) as archive:
@@ -403,17 +484,26 @@ class ParseBatchService:
                     flush_progress(force=True)
 
                     for info in archive_entries:
+                        if cls._refresh_cancel_requested(job_id, state, root_path):
+                            break
                         processed_archive_entries += 1
                         if not _is_supported_path(info.filename):
                             skipped_count += 1
                             flush_progress()
                             continue
+                        relative_path = _safe_relative_path(
+                            info.filename,
+                            f"entry-{processed_archive_entries}",
+                        )
+                        extracted_path = extracted_dir / upload_path.stem / relative_path
+                        extracted_path.parent.mkdir(parents=True, exist_ok=True)
+                        with archive.open(info, "r") as source, extracted_path.open("wb") as target:
+                            shutil.copyfileobj(source, target)
                         work_items.append(
                             {
-                                "kind": "archive_entry",
-                                "archive_path": str(upload_path),
-                                "archive_name": upload["original_name"],
-                                "entry_name": info.filename,
+                                "kind": "plain_file",
+                                "path": str(extracted_path),
+                                "file_name": f"{upload['original_name']}::{info.filename}",
                             }
                         )
                         flush_progress()
@@ -439,25 +529,36 @@ class ParseBatchService:
         return work_items, skipped_count
 
     @classmethod
+    def _refresh_cancel_requested(
+        cls,
+        job_id: str,
+        state: dict[str, Any],
+        root_path: str | Path | None = None,
+    ) -> bool:
+        """Refresh the cancel flag from disk and return the latest state."""
+        if state.get("cancel_requested"):
+            return True
+
+        latest_state = cls._load_state(job_id, root_path)
+        if latest_state.get("cancel_requested"):
+            state["cancel_requested"] = True
+            state["status"] = latest_state.get("status", state.get("status"))
+            state["phase_message"] = latest_state.get("phase_message", state.get("phase_message"))
+            return True
+        return False
+
+    @classmethod
     def _load_work_item_text(cls, work_item: dict[str, Any]) -> tuple[str, str]:
         """Load text content and display name for a single work item."""
-        if work_item["kind"] == "plain_file":
-            content = Path(work_item["path"]).read_bytes()
-            return work_item["file_name"], _decode_text_bytes(content)
-
-        archive_path = Path(work_item["archive_path"])
-        with zipfile.ZipFile(archive_path) as archive:
-            content = archive.read(work_item["entry_name"])
-        display_name = f"{work_item['archive_name']}::{work_item['entry_name']}"
-        return display_name, _decode_text_bytes(content)
+        return _load_work_item_text_payload(work_item)
 
     @classmethod
     def _consume_completed_futures(
         cls,
         job_id: str,
         state: dict[str, Any],
-        pending: set[Future[dict[str, Any]]],
-        future_meta: dict[Future[dict[str, Any]], dict[str, str]],
+        pending: set[Future[list[dict[str, Any]]]],
+        future_meta: dict[Future[list[dict[str, Any]]], dict[str, Any]],
         results_handle,
         errors_handle,
         wait_for_one: bool = False,
@@ -481,53 +582,71 @@ class ParseBatchService:
         for future in done:
             meta = future_meta.pop(future, {})
             try:
-                item = future.result()
+                items = future.result()
             except Exception as exc:  # pragma: no cover - defensive guard
-                item = {
-                    "file_name": meta.get("file_name", "unknown"),
-                    "template_id": meta.get("template_id", ""),
-                    "template_name": meta.get("template_name", "Unknown Template"),
-                    "success": False,
-                    "result": None,
-                    "csv_result": None,
-                    "checkup_csv_result": None,
-                    "error": str(exc),
-                    "error_type": type(exc).__name__,
-                    "started_at": None,
-                    "finished_at": _current_timestamp(),
-                }
+                items = [
+                    {
+                        "file_name": meta.get("file_name", "unknown"),
+                        "template_id": template.get("id", ""),
+                        "template_name": template.get("name", "Unknown Template"),
+                        "success": False,
+                        "result": None,
+                        "csv_result": None,
+                        "checkup_csv_result": None,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "started_at": None,
+                        "finished_at": _current_timestamp(),
+                    }
+                    for template in meta.get("templates", [])
+                ] or [
+                    {
+                        "file_name": meta.get("file_name", "unknown"),
+                        "template_id": "",
+                        "template_name": "Unknown Template",
+                        "success": False,
+                        "result": None,
+                        "csv_result": None,
+                        "checkup_csv_result": None,
+                        "error": str(exc),
+                        "error_type": type(exc).__name__,
+                        "started_at": None,
+                        "finished_at": _current_timestamp(),
+                    }
+                ]
 
-            results_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
-            if not item["success"]:
-                errors_handle.write(
-                    json.dumps(
-                        {
-                            "file_name": item["file_name"],
-                            "template_name": item["template_name"],
-                            "error": item.get("error"),
-                            "error_type": item.get("error_type"),
-                        },
-                        ensure_ascii=False,
+            for item in items:
+                results_handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+                if not item["success"]:
+                    errors_handle.write(
+                        json.dumps(
+                            {
+                                "file_name": item["file_name"],
+                                "template_name": item["template_name"],
+                                "error": item.get("error"),
+                                "error_type": item.get("error_type"),
+                            },
+                            ensure_ascii=False,
+                        )
+                        + "\n"
                     )
-                    + "\n"
-                )
 
-            preview_item = {
-                "file_name": item["file_name"],
-                "template_name": item["template_name"],
-                "success": item["success"],
-                "error": item.get("error"),
-                "error_type": item.get("error_type"),
-            }
-            cls._append_preview_result(state, preview_item)
+                preview_item = {
+                    "file_name": item["file_name"],
+                    "template_name": item["template_name"],
+                    "success": item["success"],
+                    "error": item.get("error"),
+                    "error_type": item.get("error_type"),
+                }
+                cls._append_preview_result(state, preview_item)
 
-            state["completed_tasks"] += 1
-            if item["success"]:
-                state["success_count"] += 1
-            else:
-                state["failure_count"] += 1
-                state["recent_error"] = preview_item
-            completed_count += 1
+                state["completed_tasks"] += 1
+                if item["success"]:
+                    state["success_count"] += 1
+                else:
+                    state["failure_count"] += 1
+                    state["recent_error"] = preview_item
+                completed_count += 1
 
         return completed_count
 
@@ -579,6 +698,40 @@ class ParseBatchService:
         )
 
     @classmethod
+    def _mark_cancelled(
+        cls,
+        job_id: str,
+        state: dict[str, Any],
+        templates: list[dict[str, str]],
+        root_path: str | Path | None = None,
+    ) -> None:
+        """Persist a cancelled job state and summary."""
+        state["cancel_requested"] = True
+        state["status"] = "cancelled"
+        state["phase_message"] = "Batch parse cancelled"
+        state["completed_at"] = _current_timestamp()
+        state["artifacts"] = {
+            "summary": cls._summary_path(job_id, root_path).name,
+            "results": cls._results_path(job_id, root_path).name if cls._results_path(job_id, root_path).exists() else None,
+            "errors": cls._errors_path(job_id, root_path).name if cls._errors_path(job_id, root_path).exists() else None,
+        }
+        cls._finalize_summary(job_id, state, templates, root_path)
+        cls._write_state(job_id, state, root_path)
+
+    @classmethod
+    def _create_executor(cls):
+        """Create the configured executor for batch parse work."""
+        if EXECUTOR_KIND == "thread":
+            return ThreadPoolExecutor(max_workers=MAX_PARSE_WORKERS)
+        try:
+            return ProcessPoolExecutor(
+                max_workers=MAX_PARSE_WORKERS,
+                mp_context=get_context("spawn"),
+            )
+        except (OSError, PermissionError, ValueError):
+            return ThreadPoolExecutor(max_workers=MAX_PARSE_WORKERS)
+
+    @classmethod
     def _run_job(
         cls,
         job_id: str,
@@ -588,6 +741,9 @@ class ParseBatchService:
     ) -> None:
         """Process a batch parse job in the background."""
         state = cls._load_state(job_id, root_path)
+        if state.get("cancel_requested"):
+            cls._mark_cancelled(job_id, state, templates, root_path)
+            return
         cls._update_state_fields(
             job_id,
             state,
@@ -599,6 +755,9 @@ class ParseBatchService:
 
         try:
             work_items, skipped_count = cls._scan_uploads(job_id, state, uploads, root_path)
+            if state.get("cancel_requested"):
+                cls._mark_cancelled(job_id, state, templates, root_path)
+                return
             cls._update_state_fields(
                 job_id,
                 state,
@@ -615,9 +774,9 @@ class ParseBatchService:
 
             with results_path.open("w", encoding="utf-8") as results_handle, errors_path.open(
                 "w", encoding="utf-8"
-            ) as errors_handle, ThreadPoolExecutor(max_workers=MAX_PARSE_WORKERS) as executor:
-                pending: set[Future[dict[str, Any]]] = set()
-                future_meta: dict[Future[dict[str, Any]], dict[str, str]] = {}
+            ) as errors_handle, cls._create_executor() as executor:
+                pending: set[Future[list[dict[str, Any]]]] = set()
+                future_meta: dict[Future[list[dict[str, Any]]], dict[str, Any]] = {}
                 completed_since_flush = 0
                 last_progress_flush_at = _current_timestamp()
 
@@ -636,36 +795,28 @@ class ParseBatchService:
                     last_progress_flush_at = now
 
                 for work_item in work_items:
-                    file_name, data = cls._load_work_item_text(work_item)
-                    for template in templates:
-                        future = executor.submit(
-                            _parse_task,
-                            file_name,
-                            template["id"],
-                            template["name"],
-                            template["template"],
-                            data,
+                    if cls._refresh_cancel_requested(job_id, state, root_path):
+                        break
+                    future = executor.submit(_parse_work_item, work_item, templates)
+                    pending.add(future)
+                    future_meta[future] = {
+                        "file_name": _work_item_display_name(work_item),
+                        "templates": [{"id": template["id"], "name": template["name"]} for template in templates],
+                    }
+
+                    if len(pending) >= MAX_PENDING_FUTURES:
+                        completed_since_flush += cls._consume_completed_futures(
+                            job_id,
+                            state,
+                            pending,
+                            future_meta,
+                            results_handle,
+                            errors_handle,
+                            wait_for_one=True,
                         )
-                        pending.add(future)
-                        future_meta[future] = {
-                            "file_name": file_name,
-                            "template_id": template["id"],
-                            "template_name": template["name"],
-                        }
+                        flush_parse_progress()
 
-                        if len(pending) >= MAX_PENDING_FUTURES:
-                            completed_since_flush += cls._consume_completed_futures(
-                                job_id,
-                                state,
-                                pending,
-                                future_meta,
-                                results_handle,
-                                errors_handle,
-                                wait_for_one=True,
-                            )
-                            flush_parse_progress()
-
-                while pending:
+                while pending and not state.get("cancel_requested"):
                     completed_since_flush += cls._consume_completed_futures(
                         job_id,
                         state,
@@ -676,8 +827,16 @@ class ParseBatchService:
                         wait_for_one=True,
                     )
                     flush_parse_progress(force=not pending)
+                    cls._refresh_cancel_requested(job_id, state, root_path)
 
                 flush_parse_progress(force=True)
+
+                if state.get("cancel_requested"):
+                    for future in list(pending):
+                        future.cancel()
+                    flush_parse_progress(force=True)
+                    cls._mark_cancelled(job_id, state, templates, root_path)
+                    return
 
             state["status"] = "completed"
             state["phase_message"] = "Batch parse completed"

@@ -43,7 +43,7 @@ export interface BatchParseJobUpload {
 
 export interface BatchParseJob {
   id: string
-  status: 'queued' | 'scanning' | 'parsing' | 'completed' | 'failed'
+  status: 'queued' | 'scanning' | 'parsing' | 'cancel_requested' | 'cancelled' | 'completed' | 'failed'
   phaseMessage: string
   createdAt: number
   updatedAt: number
@@ -100,7 +100,7 @@ interface BatchParseJobUploadResponse {
 
 interface BatchParseJobResponse {
   id: string
-  status: 'queued' | 'scanning' | 'parsing' | 'completed' | 'failed'
+  status: 'queued' | 'scanning' | 'parsing' | 'cancel_requested' | 'cancelled' | 'completed' | 'failed'
   phase_message: string
   created_at: number
   updated_at: number
@@ -634,6 +634,11 @@ export async function createBatchParseJob(
 
 export async function getBatchParseJob(jobId: string): Promise<BatchParseJob> {
   const response = await api.get<BatchParseJobResponse>(`/parse/batch/jobs/${jobId}`)
+  return mapBatchParseJob(response.data)
+}
+
+export async function cancelBatchParseJob(jobId: string): Promise<BatchParseJob> {
+  const response = await api.post<BatchParseJobResponse>(`/parse/batch/jobs/${jobId}/cancel`)
   return mapBatchParseJob(response.data)
 }
 
