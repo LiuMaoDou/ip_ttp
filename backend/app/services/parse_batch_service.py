@@ -53,6 +53,8 @@ PARSE_PROGRESS_FLUSH_INTERVAL_MS = _env_int(
     minimum=100,
 )
 RESULTS_FLUSH_EVERY = _env_int("TTP_BATCH_RESULTS_FLUSH_EVERY", 100, minimum=1)
+STATE_FILE_RETRY_COUNT = _env_int("TTP_BATCH_STATE_RETRY_COUNT", 8, minimum=1)
+STATE_FILE_RETRY_DELAY_MS = _env_int("TTP_BATCH_STATE_RETRY_DELAY_MS", 25, minimum=1)
 
 
 def _current_timestamp() -> int:
@@ -167,6 +169,7 @@ class ParseBatchService:
 
     _lock = threading.Lock()
     _job_threads: dict[str, threading.Thread] = {}
+    _state_locks: dict[str, threading.Lock] = {}
 
     @classmethod
     def get_root_path(cls, root_path: str | Path | None = None) -> Path:
@@ -209,11 +212,33 @@ class ParseBatchService:
         return cls._job_dir(job_id, root_path) / "extracted"
 
     @classmethod
+    def _get_state_lock(cls, job_id: str) -> threading.Lock:
+        with cls._lock:
+            lock = cls._state_locks.get(job_id)
+            if lock is None:
+                lock = threading.Lock()
+                cls._state_locks[job_id] = lock
+            return lock
+
+    @classmethod
     def _load_state(cls, job_id: str, root_path: str | Path | None = None) -> dict[str, Any]:
         state_path = cls._state_path(job_id, root_path)
         if not state_path.exists():
             raise FileNotFoundError(f"Batch parse job not found: {job_id}")
-        return json.loads(state_path.read_text(encoding="utf-8"))
+        state_lock = cls._get_state_lock(job_id)
+        last_error: Exception | None = None
+        for attempt in range(STATE_FILE_RETRY_COUNT):
+            try:
+                with state_lock:
+                    return json.loads(state_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                last_error = exc
+                if attempt == STATE_FILE_RETRY_COUNT - 1:
+                    break
+                time.sleep(STATE_FILE_RETRY_DELAY_MS / 1000)
+        if last_error is not None:
+            raise last_error
+        raise FileNotFoundError(f"Batch parse job not found: {job_id}")
 
     @classmethod
     def _write_state(
@@ -224,9 +249,30 @@ class ParseBatchService:
     ) -> None:
         state["updated_at"] = _current_timestamp()
         state_path = cls._state_path(job_id, root_path)
-        temp_state_path = state_path.with_suffix(".tmp")
-        temp_state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp_state_path.replace(state_path)
+        state_lock = cls._get_state_lock(job_id)
+        payload = json.dumps(state, ensure_ascii=False, indent=2)
+        last_error: Exception | None = None
+
+        for attempt in range(STATE_FILE_RETRY_COUNT):
+            temp_state_path = state_path.with_name(f"{state_path.stem}.{threading.get_ident()}.{attempt}.tmp")
+            try:
+                with state_lock:
+                    temp_state_path.write_text(payload, encoding="utf-8")
+                    os.replace(temp_state_path, state_path)
+                return
+            except OSError as exc:
+                last_error = exc
+                try:
+                    if temp_state_path.exists():
+                        temp_state_path.unlink()
+                except OSError:
+                    pass
+                if attempt == STATE_FILE_RETRY_COUNT - 1:
+                    break
+                time.sleep(STATE_FILE_RETRY_DELAY_MS / 1000)
+
+        if last_error is not None:
+            raise last_error
 
     @classmethod
     async def create_job(
