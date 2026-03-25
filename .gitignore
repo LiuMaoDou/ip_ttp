@@ -1,4 +1,7 @@
 *.pyc
+__pycache__/
+**/__pycache__/
+.DS_Store
 Data/*
 Output/*
 ttp.egg-info/*
@@ -10,6 +13,11 @@ docs/build/*
 docs/make.bat
 docs/Makefile
 .pytest_cache/v/cache/nodeids
+.pytest_cache/
 test/pytest/Output/*
 test/pytest/nornir.log
 ttp/ttp_dict_cache.pickle
+frontend/node_modules/
+frontend/dist/
+backend/data/*.db
+backend/data/*.db-*

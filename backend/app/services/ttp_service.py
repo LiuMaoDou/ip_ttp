@@ -250,13 +250,21 @@ class TTPService:
     }
 
     @classmethod
-    def parse(cls, data: str, template: str) -> dict[str, Any]:
+    def parse(
+        cls,
+        data: str,
+        template: str,
+        include_csv: bool = True,
+        include_checkup: bool = True,
+    ) -> dict[str, Any]:
         """
         Parse data using TTP template.
 
         Args:
             data: Raw text data to parse
             template: TTP template string
+            include_csv: Whether to build csv_result
+            include_checkup: Whether to build checkup_csv_result
 
         Returns:
             Dict with success status and result or error
@@ -267,10 +275,18 @@ class TTPService:
 
             raw_result = parser.result()
             normalized_result = _normalize_result(raw_result)
-            csv_result = _format_csv_from_normalized_result(parser, normalized_result)
-            checkup_csv_result = _generate_checkup_csv(
-                data=data,
-                accepted_match_spans=list(getattr(parser, "_last_accepted_match_spans", [])),
+            csv_result = (
+                _format_csv_from_normalized_result(parser, normalized_result)
+                if include_csv
+                else ""
+            )
+            checkup_csv_result = (
+                _generate_checkup_csv(
+                    data=data,
+                    accepted_match_spans=list(getattr(parser, "_last_accepted_match_spans", [])),
+                )
+                if include_checkup
+                else ""
             )
 
             return {

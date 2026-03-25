@@ -1,4 +1,4 @@
-import axios from 'axios'
+import axios, { type AxiosProgressEvent } from 'axios'
 
 const API_BASE = '/api'
 
@@ -29,6 +29,56 @@ export interface Pattern {
   description: string
 }
 
+export interface BatchParseTemplatePayload {
+  id: string
+  name: string
+  template: string
+}
+
+export interface BatchParseJobUpload {
+  name: string
+  size: number
+  isArchive: boolean
+}
+
+export interface BatchParseJob {
+  id: string
+  status: 'queued' | 'scanning' | 'parsing' | 'completed' | 'failed'
+  phaseMessage: string
+  createdAt: number
+  updatedAt: number
+  startedAt?: number | null
+  completedAt?: number | null
+  templateCount: number
+  uploadCount: number
+  scannedUploads: number
+  totalUploads: number
+  processedArchiveEntries: number
+  totalArchiveEntries: number
+  uploads: BatchParseJobUpload[]
+  discoveredFileCount: number
+  skippedFileCount: number
+  totalTasks: number
+  completedTasks: number
+  successCount: number
+  failureCount: number
+  previewResults: Array<Record<string, unknown>>
+  recentError?: Record<string, unknown> | null
+  artifactUrls: {
+    summary?: string | null
+    results?: string | null
+    errors?: string | null
+  }
+}
+
+export interface BatchParseResultsPage {
+  jobId: string
+  offset: number
+  limit: number
+  total: number
+  items: Array<Record<string, unknown>>
+}
+
 interface ParseResponse {
   success: boolean
   result?: unknown
@@ -40,6 +90,50 @@ interface ParseResponse {
 
 interface PatternsResponse {
   patterns: Record<string, Pattern>
+}
+
+interface BatchParseJobUploadResponse {
+  name: string
+  size: number
+  is_archive: boolean
+}
+
+interface BatchParseJobResponse {
+  id: string
+  status: 'queued' | 'scanning' | 'parsing' | 'completed' | 'failed'
+  phase_message: string
+  created_at: number
+  updated_at: number
+  started_at?: number | null
+  completed_at?: number | null
+  template_count: number
+  upload_count: number
+  scanned_uploads: number
+  total_uploads: number
+  processed_archive_entries: number
+  total_archive_entries: number
+  uploads: BatchParseJobUploadResponse[]
+  discovered_file_count: number
+  skipped_file_count: number
+  total_tasks: number
+  completed_tasks: number
+  success_count: number
+  failure_count: number
+  preview_results: Array<Record<string, unknown>>
+  recent_error?: Record<string, unknown> | null
+  artifact_urls: {
+    summary?: string | null
+    results?: string | null
+    errors?: string | null
+  }
+}
+
+interface BatchParseResultsPageResponse {
+  job_id: string
+  offset: number
+  limit: number
+  total: number
+  items: Array<Record<string, unknown>>
 }
 
 export interface SavedTemplate {
@@ -233,6 +327,10 @@ export interface GenerationRenderResult {
   errorType?: string
 }
 
+export interface CreateBatchParseJobOptions {
+  onUploadProgress?: (progressPercent: number, event: AxiosProgressEvent) => void
+}
+
 interface GenerationRenderResultResponse {
   file_name: string
   success: boolean
@@ -287,6 +385,56 @@ function mapSavedTemplate(template: SavedTemplateResponse): SavedTemplate {
     generatedTemplate: template.generated_template,
     createdAt: template.created_at,
     updatedAt: template.updated_at
+  }
+}
+
+function mapBatchParseJobUpload(upload: BatchParseJobUploadResponse): BatchParseJobUpload {
+  return {
+    name: upload.name,
+    size: upload.size,
+    isArchive: upload.is_archive
+  }
+}
+
+function mapBatchParseJob(job: BatchParseJobResponse): BatchParseJob {
+  return {
+    id: job.id,
+    status: job.status,
+    phaseMessage: job.phase_message,
+    createdAt: job.created_at,
+    updatedAt: job.updated_at,
+    startedAt: job.started_at ?? null,
+    completedAt: job.completed_at ?? null,
+    templateCount: job.template_count,
+    uploadCount: job.upload_count,
+    scannedUploads: job.scanned_uploads,
+    totalUploads: job.total_uploads,
+    processedArchiveEntries: job.processed_archive_entries,
+    totalArchiveEntries: job.total_archive_entries,
+    uploads: job.uploads.map(mapBatchParseJobUpload),
+    discoveredFileCount: job.discovered_file_count,
+    skippedFileCount: job.skipped_file_count,
+    totalTasks: job.total_tasks,
+    completedTasks: job.completed_tasks,
+    successCount: job.success_count,
+    failureCount: job.failure_count,
+    previewResults: job.preview_results,
+    recentError: job.recent_error ?? null,
+    artifactUrls: {
+      summary: job.artifact_urls?.summary ?? null,
+      results: job.artifact_urls?.results ?? null,
+      errors: job.artifact_urls?.errors ?? null
+    }
+  }
+}
+
+function mapBatchParseResultsPage(page: BatchParseResultsPageResponse): BatchParseResultsPage {
+  return {
+    jobId: page.job_id,
+    offset: page.offset,
+    limit: page.limit,
+    total: page.total,
+    items: page.items
   }
 }
 
@@ -453,6 +601,51 @@ export async function parseFile(file: File, template: string): Promise<ParseResu
 export async function getPatterns(): Promise<Record<string, Pattern>> {
   const response = await api.get<PatternsResponse>('/patterns')
   return response.data.patterns
+}
+
+export async function createBatchParseJob(
+  templates: BatchParseTemplatePayload[],
+  files: File[],
+  options?: CreateBatchParseJobOptions
+): Promise<BatchParseJob> {
+  const formData = new FormData()
+  formData.append('templates_json', JSON.stringify(templates))
+  files.forEach((file) => {
+    formData.append('files', file)
+  })
+
+  const response = await api.post<BatchParseJobResponse>('/parse/batch/jobs', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    },
+    onUploadProgress: (event) => {
+      if (!options?.onUploadProgress) {
+        return
+      }
+
+      const total = event.total ?? 0
+      const progressPercent = total > 0 ? Math.min(100, Math.round(((event.loaded ?? 0) / total) * 100)) : 0
+      options.onUploadProgress(progressPercent, event)
+    }
+  })
+
+  return mapBatchParseJob(response.data)
+}
+
+export async function getBatchParseJob(jobId: string): Promise<BatchParseJob> {
+  const response = await api.get<BatchParseJobResponse>(`/parse/batch/jobs/${jobId}`)
+  return mapBatchParseJob(response.data)
+}
+
+export async function getBatchParseResultsPage(
+  jobId: string,
+  offset = 0,
+  limit = 50
+): Promise<BatchParseResultsPage> {
+  const response = await api.get<BatchParseResultsPageResponse>(`/parse/batch/jobs/${jobId}/results`, {
+    params: { offset, limit }
+  })
+  return mapBatchParseResultsPage(response.data)
 }
 
 export async function getTemplates(): Promise<SavedTemplate[]> {

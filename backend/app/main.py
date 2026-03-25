@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .routers import generation, parse, template_library, templates
 from .services.generation_service import GenerationTemplateService
+from .services.parse_batch_service import ParseBatchService
 from .services.template_service import TemplateService
 
 app = FastAPI(
@@ -40,6 +41,7 @@ async def initialize_template_storage():
     """Ensure template storage is ready before serving requests."""
     TemplateService.initialize()
     GenerationTemplateService.initialize()
+    ParseBatchService.initialize()
 
 
 @app.get("/")
