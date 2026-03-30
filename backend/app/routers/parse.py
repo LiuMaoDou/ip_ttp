@@ -4,7 +4,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from ..services.parse_batch_service import ParseBatchService
 from ..services.ttp_service import TTPService
@@ -14,9 +14,16 @@ router = APIRouter(prefix="/api", tags=["parse"])
 
 class ParseRequest(BaseModel):
     """Request model for parsing."""
+    model_config = ConfigDict(populate_by_name=True)
+
     data: str
     template: str
     name: Optional[str] = None  # Optional name to replace template group name
+    variable_names: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("variable_names", "variableNames"),
+        serialization_alias="variable_names",
+    )
 
 
 class ParseResponse(BaseModel):
@@ -36,10 +43,16 @@ class PatternsResponse(BaseModel):
 
 class BatchTemplatePayload(BaseModel):
     """A single template entry for batch parsing."""
+    model_config = ConfigDict(populate_by_name=True)
 
     id: str
     name: str
     template: str
+    variable_names: list[str] | None = Field(
+        default=None,
+        validation_alias=AliasChoices("variable_names", "variableNames"),
+        serialization_alias="variable_names",
+    )
 
 
 class BatchParseJobResponse(BaseModel):
@@ -98,7 +111,8 @@ async def parse_text(request: ParseRequest):
 
     result = TTPService.parse(
         data=request.data,
-        template=template
+        template=template,
+        variable_names=request.variable_names,
     )
     return ParseResponse(**result)
 
@@ -215,6 +229,8 @@ async def download_batch_parse_artifact(job_id: str, artifact_name: str):
     media_type = "application/json"
     if artifact_path.suffix == ".jsonl":
         media_type = "application/x-ndjson"
+    elif artifact_path.suffix == ".xlsx":
+        media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     return FileResponse(
         artifact_path,

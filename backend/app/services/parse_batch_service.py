@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import UploadFile
+from openpyxl import Workbook
 
 from .ttp_service import TTPService
 
@@ -77,6 +78,116 @@ def _decode_text_bytes(content: bytes) -> str:
         return content.decode("latin-1")
 
 
+def _extract_variable_names_from_template(template_text: str) -> list[str]:
+    """Extract variable names in definition order from TTP template text."""
+    seen: set[str] = set()
+    names: list[str] = []
+    for match in re.finditer(r"\{\{\s*(\w+)\s*(?:\|[^}]*)?\}\}", template_text):
+        name = match.group(1)
+        if name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
+def _stringify_excel_value(value: Any) -> str:
+    """Convert non-scalar values into a stable Excel-safe string."""
+    if isinstance(value, str):
+        return value
+
+    json_value = json.dumps(value, ensure_ascii=False)
+    return json_value if json_value is not None else str(value)
+
+
+def _to_excel_cell_value(value: Any) -> str | int | float | bool | None:
+    """Normalize a Python value into a scalar Excel cell value."""
+    if value is None:
+        return None
+
+    if isinstance(value, (str, int, float, bool)):
+        return value
+
+    return _stringify_excel_value(value)
+
+
+def _combine_excel_rows(
+    current_rows: list[dict[str, str | int | float | bool | None]],
+    next_rows: list[dict[str, str | int | float | bool | None]],
+) -> list[dict[str, str | int | float | bool | None]]:
+    """Produce the cartesian merge of sibling row sets."""
+    combined: list[dict[str, str | int | float | bool | None]] = []
+    for current_row in current_rows:
+        for next_row in next_rows:
+            combined.append({**current_row, **next_row})
+    return combined
+
+
+def _flatten_result_to_rows(
+    value: Any,
+    path: tuple[str, ...] = (),
+) -> list[dict[str, str | int | float | bool | None]]:
+    """Flatten a nested result into tabular rows."""
+    if isinstance(value, list):
+        if not value:
+            return [{}]
+        rows: list[dict[str, str | int | float | bool | None]] = []
+        for item in value:
+            rows.extend(_flatten_result_to_rows(item, path))
+        return rows
+
+    if isinstance(value, dict):
+        if not value:
+            return [{}]
+
+        rows: list[dict[str, str | int | float | bool | None]] = [{}]
+        for key, child_value in value.items():
+            rows = _combine_excel_rows(rows, _flatten_result_to_rows(child_value, (*path, str(key))))
+        return rows
+
+    if not path:
+        return [{}]
+
+    return [{".".join(path): _to_excel_cell_value(value)}]
+
+
+def _build_result_excel_rows(result: Any) -> list[dict[str, str | int | float | bool | None]]:
+    """Build worksheet rows for one parsed result payload."""
+    if result is None:
+        return []
+
+    rows = _flatten_result_to_rows(result)
+    has_structured_columns = any(bool(row) for row in rows)
+    if has_structured_columns:
+        return rows
+
+    return []
+
+
+def _sanitize_excel_sheet_name(name: str) -> str:
+    """Return an Excel-compatible worksheet name."""
+    trimmed = (name or "").strip() or "Template"
+    sanitized = "".join("_" if char in {":", "\\", "/", "?", "*", "[", "]"} else char for char in trimmed)
+    sanitized = sanitized.replace("'", "").strip()
+    return (sanitized or "Template")[:31]
+
+
+def _build_unique_excel_sheet_name(template_name: str, used_names: set[str]) -> str:
+    """Ensure worksheet names stay unique within a workbook."""
+    base_name = _sanitize_excel_sheet_name(template_name)
+    if base_name not in used_names:
+        used_names.add(base_name)
+        return base_name
+
+    suffix = 2
+    while True:
+        label = f" ({suffix})"
+        candidate = f"{base_name[: 31 - len(label)]}{label}"
+        if candidate not in used_names:
+            used_names.add(candidate)
+            return candidate
+        suffix += 1
+
+
 def _is_supported_path(path: str) -> bool:
     """Return True when the path extension is parseable text."""
     suffix = Path(path).suffix.lower()
@@ -121,6 +232,7 @@ def _parse_task(
     template_name: str,
     template_text: str,
     data: str,
+    variable_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """Run one parse task and return a serializable result row."""
     started_at = _current_timestamp()
@@ -129,6 +241,7 @@ def _parse_task(
         template=template_text,
         include_csv=False,
         include_checkup=False,
+        variable_names=variable_names,
     )
     finished_at = _current_timestamp()
     return {
@@ -148,7 +261,7 @@ def _parse_task(
 
 def _parse_work_item(
     work_item: dict[str, Any],
-    templates: list[dict[str, str]],
+    templates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Load one work item and parse it against all selected templates."""
     file_name, data = _load_work_item_text_payload(work_item)
@@ -159,6 +272,7 @@ def _parse_work_item(
             template_name=template["name"],
             template_text=template["template"],
             data=data,
+            variable_names=template.get("variable_names"),
         )
         for template in templates
     ]
@@ -202,6 +316,10 @@ class ParseBatchService:
     @classmethod
     def _errors_path(cls, job_id: str, root_path: str | Path | None = None) -> Path:
         return cls._job_dir(job_id, root_path) / "errors.jsonl"
+
+    @classmethod
+    def _excel_path(cls, job_id: str, root_path: str | Path | None = None) -> Path:
+        return cls._job_dir(job_id, root_path) / "results.xlsx"
 
     @classmethod
     def _summary_path(cls, job_id: str, root_path: str | Path | None = None) -> Path:
@@ -287,7 +405,7 @@ class ParseBatchService:
         if not uploads:
             raise ValueError("At least one file upload is required")
 
-        normalized_templates: list[dict[str, str]] = []
+        normalized_templates: list[dict[str, Any]] = []
         for template in templates:
             template_text = (template.get("template") or "").strip()
             if not template_text:
@@ -297,6 +415,7 @@ class ParseBatchService:
                     "id": template.get("id") or str(uuid.uuid4()),
                     "name": template.get("name") or "Unnamed Template",
                     "template": template_text,
+                    "variable_names": template.get("variable_names"),
                 }
             )
 
@@ -361,6 +480,7 @@ class ParseBatchService:
                 "summary": None,
                 "results": None,
                 "errors": None,
+                "excel": None,
             },
         }
         cls._write_state(job_id, state, root_path)
@@ -455,11 +575,92 @@ class ParseBatchService:
             "summary": cls._summary_path(job_id, root_path),
             "results": cls._results_path(job_id, root_path),
             "errors": cls._errors_path(job_id, root_path),
+            "excel": cls._excel_path(job_id, root_path),
         }
         artifact_path = artifact_map.get(artifact_name)
         if artifact_path is None or not artifact_path.exists():
             raise FileNotFoundError(f"Artifact not found: {artifact_name}")
         return artifact_path
+
+    @classmethod
+    def _write_excel_artifact(
+        cls,
+        job_id: str,
+        root_path: str | Path | None = None,
+        templates: list[dict[str, Any]] | None = None,
+    ) -> Path | None:
+        """Build a result-only Excel workbook for a completed batch job."""
+        results_path = cls._results_path(job_id, root_path)
+        if not results_path.exists():
+            return None
+
+        template_var_order: dict[str, list[str]] = {}
+        for t in (templates or []):
+            tid = t.get("id", "")
+            if not tid:
+                continue
+            var_names = t.get("variable_names")
+            if var_names:
+                template_var_order[tid] = var_names
+            elif t.get("template"):
+                template_var_order[tid] = _extract_variable_names_from_template(t["template"])
+
+        grouped_rows: dict[str, dict[str, Any]] = {}
+        with results_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                item = json.loads(line)
+                template_key = str(item.get("template_id") or item.get("template_name") or "template")
+                template_name = str(item.get("template_name") or "Unnamed Template")
+                excel_rows = _build_result_excel_rows(item.get("result"))
+                if not excel_rows:
+                    continue
+
+                if template_key not in grouped_rows:
+                    grouped_rows[template_key] = {
+                        "template_id": template_key,
+                        "template_name": template_name,
+                        "rows": list(excel_rows),
+                    }
+                    continue
+
+                grouped_rows[template_key]["rows"].extend(excel_rows)
+
+        workbook = Workbook()
+        default_sheet = workbook.active
+        workbook.remove(default_sheet)
+
+        used_sheet_names: set[str] = set()
+        if not grouped_rows:
+            workbook.create_sheet(title="Results")
+        else:
+            for template_data in grouped_rows.values():
+                sheet_name = _build_unique_excel_sheet_name(template_data["template_name"], used_sheet_names)
+                worksheet = workbook.create_sheet(title=sheet_name)
+                rows = template_data["rows"]
+                headers: list[str] = []
+                seen_headers: set[str] = set()
+                for row in rows:
+                    for key in row:
+                        if key not in seen_headers:
+                            seen_headers.add(key)
+                            headers.append(key)
+
+                if not headers:
+                    headers = ["value"]
+
+                var_order = template_var_order.get(template_data.get("template_id", ""), [])
+                if var_order:
+                    ordered = [v for v in var_order if v in seen_headers]
+                    ordered += [h for h in headers if h not in set(var_order)]
+                    headers = ordered
+
+                worksheet.append(headers)
+                for row in rows:
+                    worksheet.append([row.get(header) for header in headers])
+
+        excel_path = cls._excel_path(job_id, root_path)
+        workbook.save(excel_path)
+        return excel_path
 
     @classmethod
     def _append_preview_result(cls, state: dict[str, Any], item: dict[str, Any]) -> None:
@@ -664,7 +865,12 @@ class ParseBatchService:
             for item in items:
                 compact_result = {
                     "file_name": item["file_name"],
+                    "template_id": item["template_id"],
+                    "template_name": item["template_name"],
+                    "success": item["success"],
                     "result": item.get("result"),
+                    "error": item.get("error"),
+                    "error_type": item.get("error_type"),
                 }
                 results_handle.write(json.dumps(compact_result, ensure_ascii=False) + "\n")
                 if not item["success"]:
@@ -764,6 +970,7 @@ class ParseBatchService:
             "summary": cls._summary_path(job_id, root_path).name,
             "results": cls._results_path(job_id, root_path).name if cls._results_path(job_id, root_path).exists() else None,
             "errors": cls._errors_path(job_id, root_path).name if cls._errors_path(job_id, root_path).exists() else None,
+            "excel": cls._excel_path(job_id, root_path).name if cls._excel_path(job_id, root_path).exists() else None,
         }
         cls._finalize_summary(job_id, state, templates, root_path)
         cls._write_state(job_id, state, root_path)
@@ -888,6 +1095,8 @@ class ParseBatchService:
                     cls._mark_cancelled(job_id, state, templates, root_path)
                     return
 
+            excel_path = cls._write_excel_artifact(job_id, root_path, templates=templates)
+
             state["status"] = "completed"
             state["phase_message"] = "Batch parse completed"
             state["completed_at"] = _current_timestamp()
@@ -895,6 +1104,7 @@ class ParseBatchService:
                 "summary": cls._summary_path(job_id, root_path).name,
                 "results": results_path.name,
                 "errors": errors_path.name,
+                "excel": excel_path.name if excel_path is not None else None,
             }
             cls._finalize_summary(job_id, state, templates, root_path)
             cls._write_state(job_id, state, root_path)
@@ -911,6 +1121,7 @@ class ParseBatchService:
                 "summary": cls._summary_path(job_id, root_path).name,
                 "results": cls._results_path(job_id, root_path).name if cls._results_path(job_id, root_path).exists() else None,
                 "errors": cls._errors_path(job_id, root_path).name if cls._errors_path(job_id, root_path).exists() else None,
+                "excel": cls._excel_path(job_id, root_path).name if cls._excel_path(job_id, root_path).exists() else None,
             }
             cls._finalize_summary(job_id, state, templates, root_path)
             cls._write_state(job_id, state, root_path)

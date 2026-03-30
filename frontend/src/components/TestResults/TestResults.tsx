@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import { formatFileSize } from '../../utils'
-import { useStore } from '../../store/useStore'
+import { useStore, type UploadedBatchFile, type Variable } from '../../store/useStore'
 import {
   cancelBatchParseJob,
   createBatchParseJob,
@@ -23,14 +23,7 @@ interface TemplateSource {
   categoryPath: string[]
   description?: string
   source: 'current' | 'saved'
-}
-
-interface UploadedBatchFile {
-  id: string
-  file: File
-  name: string
-  size: number
-  isArchive: boolean
+  variableNames?: string[]
 }
 
 interface QuickParseItem {
@@ -57,6 +50,45 @@ type ResultViewSource = 'batch' | 'quick'
 const TEST_RESULTS_SELECTED_TEMPLATE_IDS_STORAGE_KEY = 'ttp-test-results-selected-template-ids'
 const TEST_RESULTS_LAST_JOB_ID_STORAGE_KEY = 'ttp-test-results-last-job-id'
 const RESULTS_PAGE_SIZE = 50
+const IDB_DB_NAME = 'ttp-web'
+const IDB_STORE = 'batch-uploads'
+const IDB_KEY = 'uploads'
+
+function openIDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IDB_DB_NAME, 1)
+    req.onupgradeneeded = () => { req.result.createObjectStore(IDB_STORE) }
+    req.onsuccess = () => { resolve(req.result) }
+    req.onerror = () => { reject(req.error) }
+  })
+}
+
+async function idbGet<T>(key: string): Promise<T | undefined> {
+  const db = await openIDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(key)
+    req.onsuccess = () => { resolve(req.result as T) }
+    req.onerror = () => { reject(req.error) }
+  })
+}
+
+async function idbSet(key: string, value: unknown): Promise<void> {
+  const db = await openIDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).put(value, key)
+    req.onsuccess = () => { resolve() }
+    req.onerror = () => { reject(req.error) }
+  })
+}
+
+async function idbDelete(key: string): Promise<void> {
+  const db = await openIDB()
+  return new Promise((resolve, reject) => {
+    const req = db.transaction(IDB_STORE, 'readwrite').objectStore(IDB_STORE).delete(key)
+    req.onsuccess = () => { resolve() }
+    req.onerror = () => { reject(req.error) }
+  })
+}
 
 function createUploadId() {
   return `upload-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -106,6 +138,31 @@ function setStoredJobId(jobId: string | null) {
   }
 
   window.localStorage.setItem(TEST_RESULTS_LAST_JOB_ID_STORAGE_KEY, jobId)
+}
+
+function extractOrderedVariableNames(
+  variables: Array<Partial<Variable> | Record<string, unknown>> | undefined
+): string[] {
+  if (!variables || variables.length === 0) {
+    return []
+  }
+
+  const names: string[] = []
+  const seen = new Set<string>()
+
+  variables.forEach((variable) => {
+    const rawName = variable['name']
+    const rawSyntaxMode = variable['syntaxMode']
+    const name = typeof rawName === 'string' ? rawName.trim() : ''
+    const syntaxMode = typeof rawSyntaxMode === 'string' ? rawSyntaxMode : 'variable'
+    if (!name || syntaxMode !== 'variable' || seen.has(name)) {
+      return
+    }
+    seen.add(name)
+    names.push(name)
+  })
+
+  return names
 }
 
 function getProgressPercent(job: BatchParseJob | null): number {
@@ -199,11 +256,37 @@ export default function TestResults() {
     vendors,
     parseCategories,
     templateName,
+    variables,
     inputText,
-    setInputText
+    setInputText,
+    addGenerationUploadedFile,
+    setActiveTab,
+    setBatchUploads
   } = useStore()
 
-  const [uploads, setUploads] = useState<UploadedBatchFile[]>([])
+  const [uploads, setUploads] = useState<UploadedBatchFile[]>(
+    () => useStore.getState().batchUploads  // tab switch: Zustand in-memory
+  )
+  const [isRestored, setIsRestored] = useState(() => useStore.getState().batchUploads.length > 0)
+
+  // Page refresh: restore from IndexedDB (async, runs once on mount)
+  useEffect(() => {
+    if (isRestored) return
+    void idbGet<UploadedBatchFile[]>(IDB_KEY).then((stored) => {
+      if (stored && stored.length > 0) setUploads(stored)
+      setIsRestored(true)
+    }).catch(() => { setIsRestored(true) })
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Keep Zustand + IndexedDB in sync (only after restore to avoid clobbering saved data)
+  useEffect(() => {
+    if (!isRestored) return
+    setBatchUploads(uploads)
+    void idbSet(IDB_KEY, uploads).catch(() => { /* ignore */ })
+  }, [uploads, isRestored, setBatchUploads])
+
+  const [excludedResultKeys, setExcludedResultKeys] = useState<Set<string>>(new Set())
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>(() => loadStoredSelectedTemplateIds())
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false)
   const [isCancellingBatch, setIsCancellingBatch] = useState(false)
@@ -233,7 +316,8 @@ export default function TestResults() {
         vendor: tpl.vendor,
         categoryPath: tpl.categoryPath,
         description: tpl.description,
-        source: 'saved' as const
+        source: 'saved' as const,
+        variableNames: extractOrderedVariableNames(tpl.variables)
       }))
   ), [savedTemplates])
 
@@ -254,9 +338,10 @@ export default function TestResults() {
       vendor: 'Unassigned',
       categoryPath: [],
       description: 'Unsaved template from Template Builder',
-      source: 'current'
+      source: 'current',
+      variableNames: extractOrderedVariableNames(variables)
     }
-  }, [generatedTemplate, savedTemplateOptions, templateName])
+  }, [generatedTemplate, savedTemplateOptions, templateName, variables])
 
   useEffect(() => {
     const optionIds = [
@@ -295,7 +380,8 @@ export default function TestResults() {
     selectedTemplates.map((template) => ({
       id: template.id,
       name: template.name,
-      template: template.template
+      template: template.template,
+      variableNames: template.variableNames
     }))
   ), [selectedTemplates])
 
@@ -308,6 +394,7 @@ export default function TestResults() {
         const page = await getBatchParseResultsPage(job.id, 0, RESULTS_PAGE_SIZE)
         setBatchResultsPage(page)
         setBatchResultsOffset(0)
+        setExcludedResultKeys(new Set())
       }
       setBatchError(null)
     } catch (error) {
@@ -357,16 +444,17 @@ export default function TestResults() {
 
     setQuickParseResults([])
     setBatchError(null)
-    setUploads((current) => [
-      ...current,
-      ...acceptedFiles.map((file) => ({
-        id: createUploadId(),
-        file,
-        name: file.name,
-        size: file.size,
-        isArchive: getPathExtension(file.name) === '.zip'
-      }))
-    ])
+
+    void Promise.all(acceptedFiles.map(async (file) => {
+      const isArchive = getPathExtension(file.name) === '.zip'
+      if (isArchive) {
+        const blob = new Blob([await file.arrayBuffer()], { type: 'application/zip' })
+        return { id: createUploadId(), name: file.name, size: file.size, isArchive, content: '', blob }
+      }
+      return { id: createUploadId(), name: file.name, size: file.size, isArchive, content: await file.text() }
+    })).then((newFiles) => {
+      setUploads((current) => [...current, ...newFiles])
+    })
   }, [])
 
   useEffect(() => {
@@ -399,33 +487,9 @@ export default function TestResults() {
       return
     }
 
-    let cancelled = false
-    setIsLoadingUploadPreview(true)
     setUploadPreviewError(null)
-
-    void selectedUpload.file.text()
-      .then((text) => {
-        if (cancelled) {
-          return
-        }
-        setUploadPreviewContent(text)
-      })
-      .catch((error) => {
-        if (cancelled) {
-          return
-        }
-        setUploadPreviewContent('')
-        setUploadPreviewError(error instanceof Error ? error.message : 'Failed to read file preview')
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setIsLoadingUploadPreview(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
+    setUploadPreviewContent(selectedUpload.content)
+    setIsLoadingUploadPreview(false)
   }, [selectedUpload])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -444,6 +508,7 @@ export default function TestResults() {
 
   const handleClearUploads = () => {
     setUploads([])
+    void idbDelete(IDB_KEY).catch(() => { /* ignore */ })
   }
 
   const handleSelectAllTemplates = () => {
@@ -483,7 +548,11 @@ export default function TestResults() {
     setActiveResultSource('batch')
 
     try {
-      const job = await createBatchParseJob(batchTemplates, uploads.map((upload) => upload.file), {
+      const job = await createBatchParseJob(batchTemplates, uploads.map((upload) =>
+        upload.isArchive && upload.blob
+          ? new File([upload.blob], upload.name, { type: 'application/zip' })
+          : new File([upload.content], upload.name)
+      ), {
         onUploadProgress: (progressPercent) => {
           setUploadProgressPercent(progressPercent)
         }
@@ -550,7 +619,7 @@ export default function TestResults() {
     try {
       const results: QuickParseItem[] = []
       for (const template of batchTemplates) {
-        const result = await parseText(inputText, template.template)
+        const result = await parseText(inputText, template.template, undefined, template.variableNames)
         results.push({
           templateId: template.id,
           templateName: template.name,
@@ -558,6 +627,7 @@ export default function TestResults() {
         })
       }
       setQuickParseResults(results)
+      setExcludedResultKeys(new Set())
       setActiveResultSource('quick')
     } catch (error) {
       setBatchError(error instanceof Error ? error.message : 'Quick parse failed')
@@ -655,16 +725,13 @@ export default function TestResults() {
   ), [rawBatchResults])
 
   const displayResults = useMemo<DisplayResultItem[]>(() => {
-    if (activeResultSource === 'quick' && quickItems.length > 0) {
-      return quickItems
-    }
-
-    if (batchItems.length > 0) {
-      return batchItems
-    }
-
-    return quickItems
-  }, [activeResultSource, batchItems, quickItems])
+    const all = (activeResultSource === 'quick' && quickItems.length > 0)
+      ? quickItems
+      : batchItems.length > 0
+        ? batchItems
+        : quickItems
+    return excludedResultKeys.size > 0 ? all.filter((item) => !excludedResultKeys.has(item.key)) : all
+  }, [activeResultSource, batchItems, quickItems, excludedResultKeys])
 
   useEffect(() => {
     if (displayResults.length === 0) {
@@ -678,7 +745,46 @@ export default function TestResults() {
   const currentResult = displayResults[selectedResultIndex] || displayResults[0] || null
   const successCount = displayResults.filter((item) => item.success).length
   const failedCount = displayResults.filter((item) => !item.success).length
-  const hasDownloads = Boolean(batchJob?.artifactUrls.summary || batchJob?.artifactUrls.results || batchJob?.artifactUrls.errors)
+  const hasDownloads = Boolean(
+    batchJob?.artifactUrls.summary
+    || batchJob?.artifactUrls.results
+    || batchJob?.artifactUrls.errors
+    || batchJob?.artifactUrls.excel
+  )
+
+  const handleSendToConfigGen = () => {
+    const eligible = displayResults.filter((item) => item.success && item.result !== undefined)
+    if (eligible.length === 0) return
+
+    const byFile: Record<string, { alias: string; result: unknown }[]> = {}
+    eligible.forEach((item) => {
+      const alias = item.templateName
+        .trim().toLowerCase()
+        .replace(/[^a-z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '') || 'template'
+      if (!byFile[item.fileName]) byFile[item.fileName] = []
+      byFile[item.fileName].push({ alias, result: item.result })
+    })
+
+    Object.entries(byFile).forEach(([fileName, items]) => {
+      const payload: Record<string, unknown> = {}
+      items.forEach(({ alias, result }) => { payload[alias] = result })
+      const jsonStr = JSON.stringify(payload, null, 2)
+      const blob = new Blob([jsonStr], { type: 'application/json' })
+      const baseName = fileName.replace(/\.[^/.]+$/, '') || 'results'
+      const outName = `${baseName}.json`
+      const file = new File([blob], outName, { type: 'application/json' })
+      addGenerationUploadedFile({
+        id: `genfile-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
+        file,
+        name: outName,
+        size: blob.size,
+        content: jsonStr
+      })
+    })
+
+    setActiveTab('config')
+  }
 
   return (
     <div className="flex flex-col h-full text-sm relative" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
@@ -734,6 +840,13 @@ export default function TestResults() {
           >
             {isCancellingBatch || batchJob?.status === 'cancel_requested' ? 'Stopping...' : 'Stop Batch'}
           </button>
+          <button
+            onClick={handleSendToConfigGen}
+            disabled={displayResults.filter((item) => item.success && item.result !== undefined).length === 0}
+            className="btn"
+          >
+            → Config Gen
+          </button>
           {hasDownloads && (
             <div className="relative">
               <button
@@ -763,6 +876,11 @@ export default function TestResults() {
                   {batchJob?.artifactUrls.errors && (
                     <a href={batchJob.artifactUrls.errors} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
                       Errors JSONL
+                    </a>
+                  )}
+                  {batchJob?.artifactUrls.excel && (
+                    <a href={batchJob.artifactUrls.excel} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
+                      Excel
                     </a>
                   )}
                 </div>
@@ -924,7 +1042,7 @@ export default function TestResults() {
                   </div>
                 </div>
               ) : (
-                <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: '#cdd6f4' }}>
+                <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}>
                   {uploadPreviewContent}
                 </pre>
               )
@@ -933,8 +1051,8 @@ export default function TestResults() {
                 value={inputText}
                 onChange={(event) => setInputText(event.target.value)}
                 placeholder="Paste sample text here for quick parsing"
-                className="w-full h-full min-h-[260px] bg-transparent border-none outline-none resize-none text-sm font-mono"
-                style={{ color: '#cdd6f4' }}
+                className="w-full h-full min-h-[260px] bg-transparent border-none outline-none resize-none whitespace-pre-wrap"
+                style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}
               />
             )}
           </div>
@@ -1003,7 +1121,7 @@ export default function TestResults() {
                   </span>
                 </div>
                 <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)' }}>
-                  <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: '#cdd6f4' }}>
+                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}>
                     {JSON.stringify(currentResult.result, null, 2)}
                   </pre>
                 </div>
@@ -1027,7 +1145,7 @@ export default function TestResults() {
                   {currentResult?.errorType && (
                     <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
                   )}
-                  <pre className="text-sm whitespace-pre-wrap font-mono" style={{ color: '#d6d3d1' }}>{currentResult?.error || 'Unknown error'}</pre>
+                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#d6d3d1' }}>{currentResult?.error || 'Unknown error'}</pre>
                 </div>
               </div>
             )}
@@ -1063,6 +1181,17 @@ export default function TestResults() {
                           <p className="text-xs truncate mt-1" style={{ color: '#ef4444' }}>{item.error}</p>
                         )}
                       </div>
+                      <button
+                        className="ml-1 opacity-40 hover:opacity-100 transition-opacity flex-shrink-0"
+                        style={{ color: 'var(--text-muted)' }}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setExcludedResultKeys((prev) => new Set([...prev, item.key]))
+                        }}
+                        title="Remove this result"
+                      >
+                        ×
+                      </button>
                     </div>
                   </div>
                 ))}

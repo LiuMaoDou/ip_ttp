@@ -55,7 +55,12 @@
       "Bash(bash -n \"/d/2026/ip_ttp/start-dev.sh\")",
       "Bash(findstr :8000)",
       "Bash(findstr :5173)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(python3 -m pytest test_web_ui_generation_api.py -v)",
+      "Bash(pip3 show:*)",
+      "Bash(sqlite3:*)",
+      "Bash(python3 -c \"from backend.app.services.generation_service import ConfigGenerationService; print\\(''OK''\\)\")",
+      "Bash(find /Users/liujiannan/2026/ip_ttp/test -name *batch* -type f)"
     ]
   }
 }

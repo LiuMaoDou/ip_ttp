@@ -33,6 +33,7 @@ export interface BatchParseTemplatePayload {
   id: string
   name: string
   template: string
+  variableNames?: string[]
 }
 
 export interface BatchParseJobUpload {
@@ -68,6 +69,7 @@ export interface BatchParseJob {
     summary?: string | null
     results?: string | null
     errors?: string | null
+    excel?: string | null
   }
 }
 
@@ -125,6 +127,7 @@ interface BatchParseJobResponse {
     summary?: string | null
     results?: string | null
     errors?: string | null
+    excel?: string | null
   }
 }
 
@@ -423,7 +426,8 @@ function mapBatchParseJob(job: BatchParseJobResponse): BatchParseJob {
     artifactUrls: {
       summary: job.artifact_urls?.summary ?? null,
       results: job.artifact_urls?.results ?? null,
-      errors: job.artifact_urls?.errors ?? null
+      errors: job.artifact_urls?.errors ?? null,
+      excel: job.artifact_urls?.excel ?? null
     }
   }
 }
@@ -560,11 +564,12 @@ function mapCategory(category: TemplateCategoryResponse): TemplateCategory {
   }
 }
 
-export async function parseText(data: string, template: string, name?: string): Promise<ParseResult> {
+export async function parseText(data: string, template: string, name?: string, variableNames?: string[]): Promise<ParseResult> {
   const response = await api.post<ParseResponse>('/parse', {
     data,
     template,
-    name
+    name,
+    variable_names: variableNames,
   })
 
   return {
@@ -609,7 +614,14 @@ export async function createBatchParseJob(
   options?: CreateBatchParseJobOptions
 ): Promise<BatchParseJob> {
   const formData = new FormData()
-  formData.append('templates_json', JSON.stringify(templates))
+  formData.append('templates_json', JSON.stringify(
+    templates.map((template) => ({
+      id: template.id,
+      name: template.name,
+      template: template.template,
+      variable_names: template.variableNames,
+    }))
+  ))
   files.forEach((file) => {
     formData.append('files', file)
   })

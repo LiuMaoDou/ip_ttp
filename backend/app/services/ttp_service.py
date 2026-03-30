@@ -75,7 +75,19 @@ def _choose_key_name(path: list[str], rows: list[dict[str, Any]]) -> str:
     return f"key_{suffix}"
 
 
-def _collect_headers(rows: list[dict[str, Any]], key_name: Optional[str] = None) -> list[str]:
+def _reorder_result_keys(result: Any, variable_names: list[str]) -> Any:
+    """Recursively reorder dict keys to match variable_names order."""
+    if isinstance(result, list):
+        return [_reorder_result_keys(item, variable_names) for item in result]
+    if isinstance(result, dict):
+        name_set = set(variable_names)
+        ordered: dict[str, Any] = {k: result[k] for k in variable_names if k in result}
+        ordered.update({k: v for k, v in result.items() if k not in name_set})
+        return {k: _reorder_result_keys(v, variable_names) for k, v in ordered.items()}
+    return result
+
+
+def _collect_headers(rows: list[dict[str, Any]], key_name: Optional[str] = None, variable_names: Optional[list[str]] = None) -> list[str]:
     """Collect CSV headers in a stable order."""
     headers: list[str] = []
     seen: set[str] = set()
@@ -89,6 +101,11 @@ def _collect_headers(rows: list[dict[str, Any]], key_name: Optional[str] = None)
             if header not in seen:
                 headers.append(header)
                 seen.add(header)
+
+    if variable_names:
+        ordered = [h for h in variable_names if h in seen]
+        ordered += [h for h in headers if h not in set(variable_names)]
+        return ordered
 
     return headers
 
@@ -125,13 +142,13 @@ def _choose_candidate(candidates: list[dict[str, Any]]) -> Optional[dict[str, An
     return candidates[0]
 
 
-def _format_csv_from_normalized_result(parser: ttp, normalized_result: Any) -> str:
+def _format_csv_from_normalized_result(parser: ttp, normalized_result: Any, variable_names: Optional[list[str]] = None) -> str:
     """Run TTP's native CSV formatter against normalized API results."""
     candidate = _choose_candidate(_find_tabular_candidates(deepcopy(normalized_result)))
     if not candidate:
         return ""
 
-    headers = _collect_headers(candidate["rows"], candidate["key"])
+    headers = _collect_headers(candidate["rows"], candidate["key"], variable_names)
     if not headers:
         return ""
 
@@ -256,6 +273,7 @@ class TTPService:
         template: str,
         include_csv: bool = True,
         include_checkup: bool = True,
+        variable_names: Optional[list[str]] = None,
     ) -> dict[str, Any]:
         """
         Parse data using TTP template.
@@ -275,8 +293,10 @@ class TTPService:
 
             raw_result = parser.result()
             normalized_result = _normalize_result(raw_result)
+            if variable_names:
+                normalized_result = _reorder_result_keys(normalized_result, variable_names)
             csv_result = (
-                _format_csv_from_normalized_result(parser, normalized_result)
+                _format_csv_from_normalized_result(parser, normalized_result, variable_names)
                 if include_csv
                 else ""
             )

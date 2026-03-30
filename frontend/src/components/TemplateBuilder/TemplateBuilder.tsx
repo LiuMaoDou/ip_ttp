@@ -164,6 +164,10 @@ export default function TemplateBuilder() {
   const [templateNameInput, setTemplateNameInput] = useState('')
   const [templateVendorInput, setTemplateVendorInput] = useState('Unassigned')
   const [templateCategoryInput, setTemplateCategoryInput] = useState('')
+  const [isNewVendor, setIsNewVendor] = useState(false)
+  const [newVendorInput, setNewVendorInput] = useState('')
+  const [isNewCategory, setIsNewCategory] = useState(false)
+  const [newCategoryInput, setNewCategoryInput] = useState('')
   const [isEditorReady, setIsEditorReady] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const pendingSyncFrameRef = useRef<number | null>(null)
@@ -177,6 +181,7 @@ export default function TemplateBuilder() {
     addVariable,
     updateVariable,
     removeVariable,
+    reorderVariables,
     addGroup,
     removeGroup,
     setTemplateName,
@@ -890,24 +895,34 @@ export default function TemplateBuilder() {
     setTemplateNameInput(templateName || selectedSavedTemplate?.name || '')
     setTemplateVendorInput(selectedSavedTemplate?.vendor || currentTemplateVendor || 'Unassigned')
     setTemplateCategoryInput((selectedSavedTemplate?.categoryPath || currentTemplateCategoryPath || []).join('/'))
+    setIsNewVendor(false)
+    setNewVendorInput('')
+    setIsNewCategory(false)
+    setNewCategoryInput('')
     setShowTemplateNameModal(true)
   }, [variables, groups, templateName, selectedSavedTemplate, currentTemplateVendor, currentTemplateCategoryPath])
 
   const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
-    const categoryPath = templateCategoryInput.split('/').map((segment) => segment.trim()).filter(Boolean)
+    const finalVendor = isNewVendor ? (newVendorInput.trim() || 'Unassigned') : templateVendorInput
+    const rawCategory = isNewCategory ? newCategoryInput : templateCategoryInput
+    const categoryPath = rawCategory.split('/').map((segment) => segment.trim()).filter(Boolean)
     setTemplateName(name)
     setIsSavingTemplate(true)
     try {
-      await saveTemplate(name, '', templateVendorInput, categoryPath)
+      await saveTemplate(name, '', finalVendor, categoryPath)
       setShowTemplateNameModal(false)
       setTemplateNameInput('')
       setTemplateVendorInput('Unassigned')
       setTemplateCategoryInput('')
+      setIsNewVendor(false)
+      setNewVendorInput('')
+      setIsNewCategory(false)
+      setNewCategoryInput('')
     } finally {
       setIsSavingTemplate(false)
     }
-  }, [templateNameInput, templateVendorInput, templateCategoryInput, setTemplateName, saveTemplate])
+  }, [templateNameInput, templateVendorInput, templateCategoryInput, isNewVendor, newVendorInput, isNewCategory, newCategoryInput, setTemplateName, saveTemplate])
 
   const handleLoadTemplate = useCallback(async (id: string) => {
     suppressTrackingSyncRef.current = true
@@ -1057,6 +1072,7 @@ export default function TemplateBuilder() {
             onEditVariable={handleEditVariable}
             onRemoveVariable={removeVariable}
             onRemoveGroup={removeGroup}
+            onReorderVariable={reorderVariables}
           />
         </div>
       </div>
@@ -1092,37 +1108,112 @@ export default function TemplateBuilder() {
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
-            <input
-              type="text"
-              value={templateNameInput}
-              onChange={(e) => setTemplateNameInput(e.target.value)}
-              placeholder="Template name (e.g., interfaces)"
-              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              autoFocus
-            />
-            <input
-              type="text"
-              list="template-vendors"
-              value={templateVendorInput}
-              onChange={(e) => setTemplateVendorInput(e.target.value)}
-              placeholder="Vendor"
-              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            />
-            <datalist id="template-vendors">
-              {vendors.map((vendor) => (
-                <option key={vendor.name} value={vendor.name} />
-              ))}
-            </datalist>
-            <input
-              type="text"
-              value={templateCategoryInput}
-              onChange={(e) => setTemplateCategoryInput(e.target.value)}
-              placeholder="Folder path (e.g. Core/Interfaces)"
-              className="w-full px-3 py-2 border rounded-md mb-4 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            />
+            <div className="mb-3">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Name</div>
+              <input
+                type="text"
+                value={templateNameInput}
+                onChange={(e) => setTemplateNameInput(e.target.value)}
+                placeholder="e.g., interfaces"
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                autoFocus
+              />
+            </div>
+            {/* Vendor selector */}
+            <div className="mb-3">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Vendor</div>
+              {!isNewVendor ? (
+                <select
+                  value={templateVendorInput}
+                  onChange={(e) => {
+                    if (e.target.value === '__new__') {
+                      setIsNewVendor(true)
+                      setNewVendorInput('')
+                      setTemplateCategoryInput('')
+                      setIsNewCategory(false)
+                      setNewCategoryInput('')
+                    } else {
+                      setTemplateVendorInput(e.target.value)
+                      setTemplateCategoryInput('')
+                      setIsNewCategory(false)
+                      setNewCategoryInput('')
+                    }
+                  }}
+                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                >
+                  <option value="Unassigned">Unassigned</option>
+                  {vendors.map((vendor) => (
+                    <option key={vendor.name} value={vendor.name}>{vendor.name}</option>
+                  ))}
+                  <option value="__new__">+ New vendor...</option>
+                </select>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newVendorInput}
+                    onChange={(e) => setNewVendorInput(e.target.value)}
+                    placeholder="New vendor name"
+                    className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    autoFocus
+                  />
+                  <button
+                    onClick={() => { setIsNewVendor(false); setTemplateVendorInput(templateVendorInput) }}
+                    className="btn"
+                    type="button"
+                  >Cancel</button>
+                </div>
+              )}
+            </div>
+            {/* Folder path selector */}
+            <div className="mb-4">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Folder</div>
+              {(() => {
+                const activeVendor = isNewVendor ? newVendorInput.trim() : templateVendorInput
+                const vendorCategories = parseCategories.filter((cat) => cat.vendor === activeVendor)
+                return !isNewCategory ? (
+                  <select
+                    value={templateCategoryInput}
+                    onChange={(e) => {
+                      if (e.target.value === '__new__') {
+                        setIsNewCategory(true)
+                        setNewCategoryInput('')
+                      } else {
+                        setTemplateCategoryInput(e.target.value)
+                      }
+                    }}
+                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="">No folder (top level)</option>
+                    {vendorCategories.map((cat) => (
+                      <option key={cat.id} value={cat.path.join('/')}>{cat.path.join('/')}</option>
+                    ))}
+                    <option value="__new__">+ New folder path...</option>
+                  </select>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newCategoryInput}
+                      onChange={(e) => setNewCategoryInput(e.target.value)}
+                      placeholder="e.g. BGP/Policy"
+                      className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      autoFocus
+                    />
+                    <button
+                      onClick={() => { setIsNewCategory(false); setTemplateCategoryInput('') }}
+                      className="btn"
+                      type="button"
+                    >Cancel</button>
+                  </div>
+                )
+              })()}
+            </div>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowTemplateNameModal(false)}

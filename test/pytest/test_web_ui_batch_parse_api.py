@@ -5,6 +5,7 @@ import sys
 import zipfile
 
 import httpx
+from openpyxl import load_workbook
 
 sys.path.insert(0, "../..")
 
@@ -18,6 +19,15 @@ TEMPLATES = [
         "template": "<group>\ninterface {{ interface }}\n ip address {{ ip }}/{{ mask }}\n</group>",
     }
 ]
+
+
+def rows_to_dicts(worksheet):
+    rows = list(worksheet.iter_rows(values_only=True))
+    headers = rows[0]
+    return [
+        {header: value for header, value in zip(headers, row)}
+        for row in rows[1:]
+    ]
 
 
 async def wait_for_job_completion(client: httpx.AsyncClient, job_id: str) -> dict:
@@ -60,6 +70,7 @@ def test_batch_parse_api_processes_plain_files(tmp_path, monkeypatch):
             assert completed["failure_count"] == 0
             assert completed["artifact_urls"]["summary"] is not None
             assert completed["artifact_urls"]["results"] is not None
+            assert completed["artifact_urls"]["excel"] is not None
 
             results_response = await client.get(f"/api/parse/batch/jobs/{created['id']}/results")
             assert results_response.status_code == 200
@@ -72,6 +83,134 @@ def test_batch_parse_api_processes_plain_files(tmp_path, monkeypatch):
             assert summary_response.status_code == 200
             summary = summary_response.json()
             assert summary["counts"]["success_count"] == 2
+
+    asyncio.run(run_test())
+
+
+def test_batch_parse_api_accepts_camel_case_variable_names(tmp_path, monkeypatch):
+    monkeypatch.setenv("TTP_BATCH_JOBS_PATH", str(tmp_path / "batch-jobs"))
+
+    templates = [
+        {
+            "id": "interfaces",
+            "name": "interfaces",
+            "template": "<group>\ninterface {{ interface }}\n ip address {{ ip }}/{{ mask }}\n</group>",
+            "variableNames": ["interface", "ip", "mask"],
+        }
+    ]
+
+    async def run_test():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/parse/batch/jobs",
+                data={"templates_json": json.dumps(templates)},
+                files=[
+                    ("files", ("one.txt", b"interface Lo0\n ip address 1.1.1.1/32\n", "text/plain")),
+                ],
+            )
+
+            assert response.status_code == 200
+            created = response.json()
+
+            completed = await wait_for_job_completion(client, created["id"])
+            assert completed["status"] == "completed"
+            assert completed["success_count"] == 1
+            assert completed["failure_count"] == 0
+
+    asyncio.run(run_test())
+
+
+def test_batch_parse_excel_artifact_flattens_result_only(tmp_path, monkeypatch):
+    monkeypatch.setenv("TTP_BATCH_JOBS_PATH", str(tmp_path / "batch-jobs"))
+
+    templates = [
+        {
+            "id": "interfaces",
+            "name": "Core/Interfaces",
+            "template": (
+                "<group name=\"device\">\n"
+                "hostname {{ hostname }}\n"
+                "</group>\n"
+                "<group name=\"interfaces*\">\n"
+                "interface {{ name }}\n"
+                " ip address {{ ip }}/{{ mask }}\n"
+                "</group>"
+            ),
+        },
+        {
+            "id": "routes",
+            "name": "Core?Interfaces",
+            "template": (
+                "<group name=\"routes*\">\n"
+                "ip route {{ prefix }} {{ next_hop }}\n"
+                "</group>"
+            ),
+        },
+    ]
+
+    async def run_test():
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/parse/batch/jobs",
+                data={"templates_json": json.dumps(templates)},
+                files=[
+                    (
+                        "files",
+                        (
+                            "edge.txt",
+                            (
+                                b"hostname edge-1\n"
+                                b"interface Lo0\n ip address 1.1.1.1/32\n"
+                                b"interface Lo1\n ip address 2.2.2.2/32\n"
+                                b"ip route 0.0.0.0/0 10.0.0.1\n"
+                            ),
+                            "text/plain",
+                        ),
+                    ),
+                ],
+            )
+
+            assert response.status_code == 200
+            created = response.json()
+            completed = await wait_for_job_completion(client, created["id"])
+            assert completed["status"] == "completed"
+            assert completed["artifact_urls"]["excel"] is not None
+
+            excel_response = await client.get(completed["artifact_urls"]["excel"])
+            assert excel_response.status_code == 200
+            assert excel_response.headers["content-type"].startswith(
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            workbook = load_workbook(filename=io.BytesIO(excel_response.content), data_only=True)
+            assert workbook.sheetnames == ["Core_Interfaces", "Core_Interfaces (2)"]
+
+            interfaces_sheet = workbook["Core_Interfaces"]
+            interfaces_rows = rows_to_dicts(interfaces_sheet)
+            assert interfaces_rows == [
+                {
+                    "device.hostname": "edge-1",
+                    "interfaces.name": "Lo0",
+                    "interfaces.ip": "1.1.1.1",
+                    "interfaces.mask": "32",
+                },
+                {
+                    "device.hostname": "edge-1",
+                    "interfaces.name": "Lo1",
+                    "interfaces.ip": "2.2.2.2",
+                    "interfaces.mask": "32",
+                },
+            ]
+
+            routes_sheet = workbook["Core_Interfaces (2)"]
+            assert rows_to_dicts(routes_sheet) == [
+                {
+                    "routes.prefix": "0.0.0.0/0",
+                    "routes.next_hop": "10.0.0.1",
+                },
+            ]
 
     asyncio.run(run_test())
 

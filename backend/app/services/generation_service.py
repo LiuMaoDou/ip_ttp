@@ -429,20 +429,16 @@ class ConfigGenerationService:
 
     @staticmethod
     def _required_aliases(generation_template: dict[str, Any]) -> list[str]:
-        """Collect required template aliases from bindings or source template metadata."""
+        """Collect required template aliases from bindings only.
+
+        Source templates are informational metadata (available data catalog) and
+        are not required to be present in every uploaded JSON file.
+        """
         aliases: list[str] = []
 
         for binding in generation_template.get("bindings", []):
             reference = binding.get("reference") or {}
             alias = reference.get("template_alias") or reference.get("templateAlias")
-            if alias and alias not in aliases:
-                aliases.append(alias)
-
-        if aliases:
-            return aliases
-
-        for source_template in generation_template.get("source_templates", []):
-            alias = source_template.get("template_alias") or source_template.get("templateAlias")
             if alias and alias not in aliases:
                 aliases.append(alias)
 
@@ -454,16 +450,8 @@ class ConfigGenerationService:
         payload: Any,
         generation_template: dict[str, Any],
     ) -> dict[str, Any]:
-        """Validate the uploaded JSON payload against template requirements."""
-        namespaced_data = cls._normalize_json_payload(payload)
-        missing_aliases = [
-            alias for alias in cls._required_aliases(generation_template)
-            if alias not in namespaced_data
-        ]
-        if missing_aliases:
-            missing = ", ".join(missing_aliases)
-            raise ValueError(f"Uploaded JSON is missing required template aliases: {missing}")
-        return namespaced_data
+        """Normalize the uploaded JSON payload into template-scoped data."""
+        return cls._normalize_json_payload(payload)
 
     @staticmethod
     def _binding_expression(binding: dict[str, Any]) -> str:

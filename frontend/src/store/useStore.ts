@@ -88,6 +88,15 @@ export interface GroupRangeSyncUpdate {
   endLine: number
 }
 
+export interface UploadedBatchFile {
+  id: string
+  name: string
+  size: number
+  isArchive: boolean
+  content: string  // text content for text files; '' for archives
+  blob?: Blob      // binary content for archives (stored natively in IndexedDB)
+}
+
 export interface UploadedFile {
   id: string
   name: string
@@ -141,6 +150,9 @@ interface AppState {
   isLoadingTemplates: boolean
   isLoadingTemplateDirectories: boolean
 
+  batchUploads: UploadedBatchFile[]
+  setBatchUploads: (files: UploadedBatchFile[]) => void
+
   files: UploadedFile[]
   selectedFileId: string | null
   inputText: string
@@ -171,6 +183,7 @@ interface AppState {
   addVariable: (variable: Omit<Variable, 'id' | 'colorIndex'>) => void
   removeVariable: (id: string) => void
   updateVariable: (id: string, updates: Partial<Variable>) => void
+  reorderVariables: (fromIndex: number, toIndex: number) => void
   syncVariableRanges: (updates: VariableRangeSyncUpdate[]) => void
   addGroup: (group: Omit<Group, 'id' | 'colorIndex'>) => void
   removeGroup: (id: string) => void
@@ -227,6 +240,9 @@ interface AppState {
 
   toggleTheme: () => void
   setTheme: (theme: 'light' | 'dark') => void
+
+  activeTab: 'template' | 'test' | 'config'
+  setActiveTab: (tab: 'template' | 'test' | 'config') => void
 }
 
 const VARIABLE_COLORS = [
@@ -405,6 +421,7 @@ export const useStore = create<AppState>()(
       generationCategories: [],
       isLoadingTemplates: false,
       isLoadingTemplateDirectories: false,
+      batchUploads: [],
       files: [],
       selectedFileId: null,
       inputText: '',
@@ -453,6 +470,14 @@ export const useStore = create<AppState>()(
             v.id === id ? { ...v, ...updates } : v
           )
         }))
+      },
+
+      reorderVariables: (fromIndex, toIndex) => {
+        const { variables } = get()
+        const newVars = [...variables]
+        const [moved] = newVars.splice(fromIndex, 1)
+        newVars.splice(toIndex, 0, moved)
+        set({ variables: newVars })
       },
 
       syncVariableRanges: (updates) => {
@@ -910,6 +935,8 @@ export const useStore = create<AppState>()(
         }
       },
 
+      setBatchUploads: (files) => set({ batchUploads: files }),
+
       addFile: (file) => {
         set((state) => ({
           files: [...state.files, file]
@@ -1117,7 +1144,10 @@ export const useStore = create<AppState>()(
         const newTheme = get().theme === 'dark' ? 'light' : 'dark'
         set({ theme: newTheme })
       },
-      setTheme: (theme) => set({ theme })
+      setTheme: (theme) => set({ theme }),
+
+      activeTab: 'template',
+      setActiveTab: (tab) => set({ activeTab: tab })
     }),
     {
       name: 'ttp-web-storage',

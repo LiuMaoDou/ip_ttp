@@ -241,6 +241,11 @@ export default function ConfigGeneration() {
   const [templateCategoryInput, setTemplateCategoryInput] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [isNewVendor, setIsNewVendor] = useState(false)
+  const [newVendorInput, setNewVendorInput] = useState('')
+  const [isNewCategory, setIsNewCategory] = useState(false)
+  const [newCategoryInput, setNewCategoryInput] = useState('')
+  const [generateStatus, setGenerateStatus] = useState<{ ok: boolean; msg: string } | null>(null)
 
   const {
     generationTemplateText,
@@ -386,6 +391,26 @@ export default function ConfigGeneration() {
         setIsBindingModalOpen(true)
       }
     })
+
+    // Re-apply binding decorations after editor mounts (e.g. after tab switch)
+    const currentBindings = useStore.getState().generationBindings
+    if (currentBindings.length > 0) {
+      const decorations = currentBindings
+        .filter((binding) => binding.startLine === binding.endLine)
+        .map((binding) => ({
+          range: new monaco.Range(
+            binding.startLine,
+            binding.startColumn,
+            binding.endLine,
+            binding.endColumn
+          ),
+          options: {
+            inlineClassName: 'config-generation-binding',
+            hoverMessage: { value: binding.reference.selector }
+          }
+        }))
+      bindingDecorationIdsRef.current = editorInstance.deltaDecorations([], decorations)
+    }
   }
 
   const handlePreviewEditorMount: OnMount = (editorInstance) => {
@@ -558,6 +583,10 @@ export default function ConfigGeneration() {
     setTemplateNameInput(selectedGenerationTemplate?.name || '')
     setTemplateVendorInput(selectedGenerationTemplate?.vendor || currentGenerationTemplateVendor || 'Unassigned')
     setTemplateCategoryInput((selectedGenerationTemplate?.categoryPath || currentGenerationTemplateCategoryPath || []).join('/'))
+    setIsNewVendor(false)
+    setNewVendorInput('')
+    setIsNewCategory(false)
+    setNewCategoryInput('')
     setShowSaveModal(true)
   }
 
@@ -566,13 +595,16 @@ export default function ConfigGeneration() {
       return
     }
 
+    const finalVendor = isNewVendor ? (newVendorInput.trim() || 'Unassigned') : templateVendorInput
+    const finalCategoryStr = isNewCategory ? newCategoryInput : templateCategoryInput
+    const categoryPath = finalCategoryStr.split('/').map((segment) => segment.trim()).filter(Boolean)
+
     setIsSaving(true)
     try {
-      const categoryPath = templateCategoryInput.split('/').map((segment) => segment.trim()).filter(Boolean)
       await saveGenerationTemplate(
         templateNameInput.trim(),
         '',
-        templateVendorInput,
+        finalVendor,
         categoryPath,
         sourceTemplates
       )
@@ -592,14 +624,25 @@ export default function ConfigGeneration() {
   }
 
   const handleGenerate = async () => {
+    setGenerateStatus(null)
     await runGeneration({
       name: templateNameInput,
       description: ''
     })
 
     const { generationResults: latestResults } = useStore.getState()
-    if (latestResults.some((result) => result.success)) {
-      alert('配置生成完成')
+    const successCount = latestResults.filter((r) => r.success).length
+    const failCount = latestResults.filter((r) => !r.success).length
+
+    if (latestResults.length === 0) {
+      setGenerateStatus({ ok: false, msg: 'No files to generate.' })
+    } else if (failCount === 0) {
+      setGenerateStatus({ ok: true, msg: `Generated ${successCount} file${successCount !== 1 ? 's' : ''}.` })
+    } else if (successCount === 0) {
+      const firstError = latestResults.find((r) => !r.success)
+      setGenerateStatus({ ok: false, msg: firstError?.error ?? 'Generation failed.' })
+    } else {
+      setGenerateStatus({ ok: true, msg: `${successCount} succeeded, ${failCount} failed — see results panel.` })
     }
   }
 
@@ -645,37 +688,104 @@ export default function ConfigGeneration() {
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
-            <input
-              type="text"
-              value={templateNameInput}
-              onChange={(event) => setTemplateNameInput(event.target.value)}
-              placeholder="Generation template name"
-              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              autoFocus
-            />
-            <input
-              type="text"
-              list="generation-template-vendors"
-              value={templateVendorInput}
-              onChange={(event) => setTemplateVendorInput(event.target.value)}
-              placeholder="Vendor"
-              className="w-full px-3 py-2 border rounded-md mb-3 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            />
-            <datalist id="generation-template-vendors">
-              {vendors.map((vendor) => (
-                <option key={vendor.name} value={vendor.name} />
-              ))}
-            </datalist>
-            <input
-              type="text"
-              value={templateCategoryInput}
-              onChange={(event) => setTemplateCategoryInput(event.target.value)}
-              placeholder="Folder path (e.g. Core/BGP)"
-              className="w-full px-3 py-2 border rounded-md mb-4 focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            />
+            <div className="mb-3">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Name</div>
+              <input
+                type="text"
+                value={templateNameInput}
+                onChange={(event) => setTemplateNameInput(event.target.value)}
+                placeholder="e.g., BGP Base Config"
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                autoFocus
+              />
+            </div>
+            {/* Vendor selector */}
+            <div className="mb-3">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Vendor</div>
+              {!isNewVendor ? (
+                <select
+                  value={templateVendorInput}
+                  onChange={(event) => {
+                    if (event.target.value === '__new__') {
+                      setIsNewVendor(true)
+                      setNewVendorInput('')
+                      setTemplateCategoryInput('')
+                      setIsNewCategory(false)
+                      setNewCategoryInput('')
+                    } else {
+                      setTemplateVendorInput(event.target.value)
+                      setTemplateCategoryInput('')
+                      setIsNewCategory(false)
+                      setNewCategoryInput('')
+                    }
+                  }}
+                  className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                >
+                  <option value="Unassigned">Unassigned</option>
+                  {vendors.map((vendor) => (
+                    <option key={vendor.name} value={vendor.name}>{vendor.name}</option>
+                  ))}
+                  <option value="__new__">+ New vendor...</option>
+                </select>
+              ) : (
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newVendorInput}
+                    onChange={(event) => setNewVendorInput(event.target.value)}
+                    placeholder="New vendor name"
+                    className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                    autoFocus
+                  />
+                  <button onClick={() => { setIsNewVendor(false) }} className="btn" type="button">Cancel</button>
+                </div>
+              )}
+            </div>
+            {/* Folder selector */}
+            <div className="mb-4">
+              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Folder</div>
+              {(() => {
+                const activeVendor = isNewVendor ? newVendorInput.trim() : templateVendorInput
+                const vendorCategories = generationCategories.filter((cat) => cat.vendor === activeVendor)
+                return !isNewCategory ? (
+                  <select
+                    value={templateCategoryInput}
+                    onChange={(event) => {
+                      if (event.target.value === '__new__') {
+                        setIsNewCategory(true)
+                        setNewCategoryInput('')
+                      } else {
+                        setTemplateCategoryInput(event.target.value)
+                      }
+                    }}
+                    className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                    style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                  >
+                    <option value="">No folder (top level)</option>
+                    {vendorCategories.map((cat) => (
+                      <option key={cat.id} value={cat.path.join('/')}>{cat.path.join('/')}</option>
+                    ))}
+                    <option value="__new__">+ New folder path...</option>
+                  </select>
+                ) : (
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newCategoryInput}
+                      onChange={(event) => setNewCategoryInput(event.target.value)}
+                      placeholder="e.g. BGP/Policy"
+                      className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                      style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                      autoFocus
+                    />
+                    <button onClick={() => { setIsNewCategory(false); setTemplateCategoryInput('') }} className="btn" type="button">Cancel</button>
+                  </div>
+                )
+              })()}
+            </div>
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setShowSaveModal(false)}
@@ -741,6 +851,11 @@ export default function ConfigGeneration() {
             >
               {isGeneratingConfig ? 'Generating...' : 'Generate'}
             </button>
+            {generateStatus && (
+              <span className="text-xs" style={{ color: generateStatus.ok ? 'var(--success)' : 'var(--error)' }}>
+                {generateStatus.msg}
+              </span>
+            )}
             <button className="btn" onClick={() => void handleDownloadAll()} disabled={!generationResults.some((result) => result.success && result.generatedText)}>
               Download All
             </button>
@@ -791,15 +906,16 @@ export default function ConfigGeneration() {
         </div>
 
         <div
-          className="border-r grid min-h-0"
+          className="border-r grid min-h-0 row-span-2"
           style={{
             borderColor: 'var(--border-color)',
             gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)'
           }}
         >
           <div className="flex flex-col min-h-0">
-            <div className="p-3 border-b text-xs min-h-[58px] flex items-center" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-              在模板中选中文本后右键，选择 <span style={{ color: 'var(--text-primary)' }}>Bind to Parse Parameter</span>
+            <div className="h-11 px-4 border-b flex items-center gap-2" style={{ borderColor: 'var(--border-color)' }}>
+              <span className="text-sm whitespace-nowrap" style={{ color: 'var(--text-muted)' }}>Right-click selection to</span>
+              <span className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Bind to Parse Parameter</span>
             </div>
 
             <div className="flex-1 min-h-0">
@@ -827,8 +943,8 @@ export default function ConfigGeneration() {
           </div>
 
           <div className="border-l flex flex-col min-h-0" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="p-3 border-b text-xs min-h-[58px] flex items-center" style={{ borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-              <h3 className="text-xs font-normal" style={{ color: 'var(--text-muted)' }}>Rendered Template Preview</h3>
+            <div className="h-11 px-4 border-b flex items-center" style={{ borderColor: 'var(--border-color)' }}>
+              <h3 className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Rendered Template Preview</h3>
             </div>
             <div className="flex-1 min-h-0">
               <Editor
@@ -864,7 +980,10 @@ export default function ConfigGeneration() {
 
         <div className="row-span-2 flex flex-col min-h-0" style={{ backgroundColor: 'var(--bg-secondary)' }}>
           <div className="p-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Bindings</h3>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Bindings</h3>
+              <button className="btn text-xs" onClick={() => setGenerationBindings([])} disabled={generationBindings.length === 0}>Clear</button>
+            </div>
             <div className="space-y-2 max-h-56 overflow-auto">
               {generationBindings.length === 0 ? (
                 <p style={{ color: 'var(--text-muted)' }}>No bindings yet.</p>

@@ -6,7 +6,6 @@ import { getPatterns } from './services/api'
 type Tab = 'template' | 'test' | 'config'
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('template')
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking')
 
@@ -16,7 +15,9 @@ export default function App() {
     fetchTemplateDirectories,
     fetchGenerationTemplates,
     theme,
-    toggleTheme
+    toggleTheme,
+    activeTab,
+    setActiveTab
   } = useStore()
 
   useEffect(() => {
@@ -172,10 +173,16 @@ export default function App() {
         </div>
       )}
 
-      <main className="flex-1 overflow-hidden">
-        {activeTab === 'template' && <TemplateBuilder />}
-        {activeTab === 'test' && <TestResults />}
-        {activeTab === 'config' && <ConfigGeneration />}
+      <main className="flex-1 overflow-hidden relative">
+        <div className="h-full" style={{ display: activeTab === 'template' ? 'block' : 'none' }}>
+          <TemplateBuilder />
+        </div>
+        <div className="h-full" style={{ display: activeTab === 'test' ? 'block' : 'none' }}>
+          <TestResults />
+        </div>
+        <div className="h-full" style={{ display: activeTab === 'config' ? 'block' : 'none' }}>
+          <ConfigGeneration />
+        </div>
       </main>
 
       <footer className="px-4 py-2 text-center text-xs border-t" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
