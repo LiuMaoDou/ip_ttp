@@ -751,7 +751,7 @@ export async function deleteGenerationTemplate(templateId: string): Promise<void
 
 export async function renderGenerationFiles(
   template: GenerationTemplatePayload,
-  files: File[],
+  files: Array<{ file: File; name?: string }>,
   generationTemplateId?: string | null
 ): Promise<GenerationRenderResult[]> {
   const formData = new FormData()
@@ -760,8 +760,8 @@ export async function renderGenerationFiles(
   } else {
     formData.append('generation_template', JSON.stringify(mapGenerationTemplatePayload(template)))
   }
-  files.forEach((file) => {
-    formData.append('files', file)
+  files.forEach(({ file, name }) => {
+    formData.append('files', file, name || file.name)
   })
 
   try {

@@ -101,6 +101,31 @@ function getPathExtension(path: string): string {
   return extensionIndex >= 0 ? fileName.slice(extensionIndex).toLowerCase() : ''
 }
 
+function getLeafFileName(path: string): string {
+  const normalizedPath = path.replace(/\\/g, '/')
+  return normalizedPath.split('/').pop() || normalizedPath
+}
+
+function UploadedFileIcon() {
+  return (
+    <svg className="h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 3.75h7.879a2 2 0 011.414.586l2.371 2.371A2 2 0 0119.25 8.12V18.25A2.75 2.75 0 0116.5 21h-9A2.75 2.75 0 014.75 18.25v-11.75A2.75 2.75 0 017.5 3.75z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 11h6M9 15h4.5" />
+    </svg>
+  )
+}
+
+function ArchiveFileIcon() {
+  return (
+    <svg className="h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <rect x="4.75" y="4.5" width="14.5" height="15" rx="2.5" strokeWidth={1.8} />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M9 4.75v4.5h6V4.75" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M10 12h4M10 15h4" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 9.25v5.75" />
+    </svg>
+  )
+}
+
 function loadStoredSelectedTemplateIds(): string[] {
   if (typeof window === 'undefined') {
     return []
@@ -236,13 +261,20 @@ function getStatusTone(status?: BatchParseJob['status']): { label: string; color
 function ResultStatePill({ success }: { success: boolean }) {
   return (
     <span
-      className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium"
+      className="inline-flex items-center justify-center rounded-full text-xs font-medium flex-shrink-0"
       style={{
         color: success ? '#15803d' : '#b91c1c',
-        backgroundColor: success ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)'
+        backgroundColor: success ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)',
+        width: success ? '1.25rem' : undefined,
+        height: success ? '1.25rem' : undefined,
+        padding: success ? '0' : '0.125rem 0.5rem'
       }}
     >
-      {success ? 'Success' : 'Failed'}
+      {success ? (
+        <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
+        </svg>
+      ) : 'Failed'}
     </span>
   )
 }
@@ -300,7 +332,8 @@ export default function TestResults() {
   const [quickParseResults, setQuickParseResults] = useState<QuickParseItem[]>([])
   const [activeResultSource, setActiveResultSource] = useState<ResultViewSource>('batch')
   const [isQuickParsing, setIsQuickParsing] = useState(false)
-  const [selectedUploadId, setSelectedUploadId] = useState<string | null>(null)
+  const [selectedUploadIds, setSelectedUploadIds] = useState<string[]>([])
+  const [previewUploadId, setPreviewUploadId] = useState<string | null>(null)
   const [uploadPreviewContent, setUploadPreviewContent] = useState('')
   const [isLoadingUploadPreview, setIsLoadingUploadPreview] = useState(false)
   const [uploadPreviewError, setUploadPreviewError] = useState<string | null>(null)
@@ -459,20 +492,29 @@ export default function TestResults() {
 
   useEffect(() => {
     if (uploads.length === 0) {
-      setSelectedUploadId(null)
+      setSelectedUploadIds([])
+      setPreviewUploadId(null)
       setUploadPreviewContent('')
       setUploadPreviewError(null)
       return
     }
 
-    if (!selectedUploadId || !uploads.some((upload) => upload.id === selectedUploadId)) {
-      setSelectedUploadId(uploads[0].id)
-    }
-  }, [selectedUploadId, uploads])
+    const uploadIds = uploads.map((upload) => upload.id)
+    setSelectedUploadIds((current) => {
+      const kept = current.filter((id) => uploadIds.includes(id))
+      return kept.length > 0 ? kept : [uploads[0].id]
+    })
+    setPreviewUploadId((current) => {
+      if (current && uploadIds.includes(current)) {
+        return current
+      }
+      return uploads[0].id
+    })
+  }, [uploads])
 
   const selectedUpload = useMemo(
-    () => uploads.find((upload) => upload.id === selectedUploadId) || null,
-    [selectedUploadId, uploads]
+    () => uploads.find((upload) => upload.id === previewUploadId) || null,
+    [previewUploadId, uploads]
   )
 
   useEffect(() => {
@@ -503,12 +545,28 @@ export default function TestResults() {
   })
 
   const handleRemoveUpload = (id: string) => {
+    setSelectedUploadIds((current) => current.filter((uploadId) => uploadId !== id))
     setUploads((current) => current.filter((upload) => upload.id !== id))
   }
 
   const handleClearUploads = () => {
     setUploads([])
+    setSelectedUploadIds([])
+    setPreviewUploadId(null)
     void idbDelete(IDB_KEY).catch(() => { /* ignore */ })
+  }
+
+  const handleToggleUploadSelection = (id: string) => {
+    setSelectedUploadIds((current) => (
+      current.includes(id)
+        ? current.filter((uploadId) => uploadId !== id)
+        : [...current, id]
+    ))
+    setPreviewUploadId(id)
+  }
+
+  const handleSelectUploadPreview = (id: string) => {
+    setPreviewUploadId(id)
   }
 
   const handleSelectAllTemplates = () => {
@@ -687,7 +745,6 @@ export default function TestResults() {
   const canGoNext = batchResultsPage
     ? batchResultsOffset + batchResultsPage.items.length < batchResultsPage.total
     : false
-  const totalTemplateOptions = savedTemplateOptions.length + (currentTemplateOption ? 1 : 0)
   const quickItems = useMemo<DisplayResultItem[]>(() => (
     quickParseResults.map((item) => ({
       key: `quick-${item.templateId}`,
@@ -771,13 +828,12 @@ export default function TestResults() {
       items.forEach(({ alias, result }) => { payload[alias] = result })
       const jsonStr = JSON.stringify(payload, null, 2)
       const blob = new Blob([jsonStr], { type: 'application/json' })
-      const baseName = fileName.replace(/\.[^/.]+$/, '') || 'results'
-      const outName = `${baseName}.json`
-      const file = new File([blob], outName, { type: 'application/json' })
+      const preservedName = getLeafFileName(fileName.trim()) || 'results.json'
+      const file = new File([blob], preservedName, { type: 'application/json' })
       addGenerationUploadedFile({
         id: `genfile-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`,
         file,
-        name: outName,
+        name: preservedName,
         size: blob.size,
         content: jsonStr
       })
@@ -802,23 +858,10 @@ export default function TestResults() {
             Templates
           </button>
           <span className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
-            {selectedTemplates.length}/{totalTemplateOptions} selected
+            {selectedTemplateIds.length}/{(currentTemplateOption ? 1 : 0) + savedTemplateOptions.length} selected
           </span>
         </div>
         <div className="flex gap-2 items-center">
-          <div className="hidden md:flex items-center gap-2 mr-4">
-            <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-              Files {uploads.length}
-            </span>
-            {batchJob && (
-              <span className="text-sm px-2 py-1 rounded" style={{ backgroundColor: statusTone.bg, color: statusTone.color }}>
-                {statusTone.label}
-              </span>
-            )}
-          </div>
-          <button onClick={handleClearUploads} className="btn" disabled={uploads.length === 0}>
-            Clear
-          </button>
           <button
             onClick={handleQuickParse}
             disabled={isQuickParsing || batchTemplates.length === 0}
@@ -831,7 +874,7 @@ export default function TestResults() {
             disabled={isSubmittingBatch || uploads.length === 0 || batchTemplates.length === 0}
             className="btn"
           >
-            {isSubmittingBatch ? 'Submitting...' : 'Start Batch'}
+            {isSubmittingBatch ? 'Submitting...' : 'Batch Parse'}
           </button>
           <button
             onClick={handleCancelBatch}
@@ -902,9 +945,22 @@ export default function TestResults() {
             >
               {isSubmittingBatch ? 'Uploading' : statusTone.label}
             </span>
-            <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>
-              {progressTitle}
-            </p>
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+                {progressTitle}
+              </p>
+              {progressDetail && (
+                <>
+                  <div
+                    className="h-4 border-l border-dashed flex-shrink-0"
+                    style={{ borderColor: 'var(--border-color)' }}
+                  />
+                  <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                    {progressDetail}
+                  </p>
+                </>
+              )}
+            </div>
             <span className="text-sm whitespace-nowrap ml-auto" style={{ color: 'var(--text-muted)' }}>
               {activeProgressPercent}%
             </span>
@@ -921,11 +977,6 @@ export default function TestResults() {
               }}
             />
           </div>
-          {progressDetail && (
-            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
-              {progressDetail}
-            </p>
-          )}
         </div>
       )}
 
@@ -939,28 +990,38 @@ export default function TestResults() {
           <div>
             <div
               {...getRootProps()}
-              className="p-2 m-2 border-2 border-dashed rounded-lg cursor-pointer transition-colors"
+              className="px-3 py-2 mx-2 mt-2 border border-dashed rounded-lg cursor-pointer transition-colors"
               style={{
                 borderColor: isDragActive ? '#3b82f6' : 'var(--border-color)',
-                backgroundColor: isDragActive ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
+                backgroundColor: isDragActive ? 'rgba(59, 130, 246, 0.06)' : 'transparent',
+                color: isDragActive ? '#3b82f6' : 'var(--text-secondary)'
               }}
             >
               <input {...getInputProps()} />
-              <div className="text-center">
-                <svg className="w-6 h-6 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-muted)' }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
-                <p className="text-sm leading-5" style={{ color: 'var(--text-secondary)' }}>
-                  {isDragActive ? 'Drop files or zip here' : 'Drop Files / Zip\nor click'}
-                </p>
-              </div>
+              <p className="text-sm text-center">
+                {isDragActive ? 'Drop files or zip here' : 'Drop Files / Zip or click'}
+              </p>
             </div>
             <div className="flex-1 overflow-auto p-2">
               <div className="flex items-center justify-between mb-2 px-1">
                 <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Files</h4>
-                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  {uploads.length}
-                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="btn text-xs"
+                    onClick={handleClearUploads}
+                    disabled={uploads.length === 0}
+                  >
+                    Clear
+                  </button>
+                  {selectedUploadIds.length > 0 && (
+                    <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
+                      {selectedUploadIds.length} selected
+                    </span>
+                  )}
+                  <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    {uploads.length}
+                  </span>
+                </div>
               </div>
               {uploads.length === 0 ? (
                 <p className="text-sm px-1 py-4 text-center" style={{ color: 'var(--text-muted)' }}>
@@ -969,20 +1030,35 @@ export default function TestResults() {
 	              ) : (
 	                <div className="space-y-0.5">
                   {uploads.map((upload) => {
-                    const isSelected = selectedUploadId === upload.id
+                    const isSelected = selectedUploadIds.includes(upload.id)
+                    const isPreviewed = previewUploadId === upload.id
 
                     return (
                       <div
                         key={upload.id}
-                        onClick={() => setSelectedUploadId(upload.id)}
+                        onClick={() => handleSelectUploadPreview(upload.id)}
                         className="px-2 py-1.5 rounded-md cursor-pointer group transition-colors"
                         style={{
-                          backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.18)' : 'transparent',
-                          border: isSelected ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
+                          backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.12)' : 'transparent',
+                          border: isPreviewed ? '1px solid rgba(59, 130, 246, 0.55)' : '1px solid transparent'
                         }}
                         title={upload.name}
                       >
                         <div className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            readOnly
+                            onClick={(event) => {
+                              event.stopPropagation()
+                              handleToggleUploadSelection(upload.id)
+                            }}
+                            className="mt-1 h-3.5 w-3.5 accent-blue-500"
+                            aria-label={`Select ${upload.name}`}
+                          />
+                          <span className="mt-0.5" style={{ color: upload.isArchive ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
+                            {upload.isArchive ? <ArchiveFileIcon /> : <UploadedFileIcon />}
+                          </span>
                           <div className="flex-1 min-w-0">
                             <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{upload.name}</p>
                             <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
@@ -1042,7 +1118,7 @@ export default function TestResults() {
                   </div>
                 </div>
               ) : (
-                <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}>
+                <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>
                   {uploadPreviewContent}
                 </pre>
               )
@@ -1052,7 +1128,7 @@ export default function TestResults() {
                 onChange={(event) => setInputText(event.target.value)}
                 placeholder="Paste sample text here for quick parsing"
                 className="w-full h-full min-h-[260px] bg-transparent border-none outline-none resize-none whitespace-pre-wrap"
-                style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}
+                style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}
               />
             )}
           </div>
@@ -1060,7 +1136,7 @@ export default function TestResults() {
 
         <div className="flex flex-col min-w-0 min-h-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
           <div className="h-11 px-4 border-b flex items-center gap-4 min-w-0" style={{ borderColor: 'var(--border-color)' }}>
-            <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>Results:</span>
+            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Results:</span>
             {displayResults.length > 0 ? (
               <>
                 {successCount > 0 && (
@@ -1110,18 +1186,22 @@ export default function TestResults() {
             ) : currentResult?.success ? (
               <div>
                 <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: 'var(--surface-success-bg)', border: '1px solid var(--surface-success-border)' }}>
-                  <svg className="w-5 h-5" style={{ color: '#22c55e' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  <span className="font-medium" style={{ color: '#22c55e' }}>
-                    {currentResult.source === 'batch' ? 'Parse successful' : 'Quick parse successful'}
+                  <span
+                    className="inline-flex h-7 w-7 items-center justify-center rounded-full"
+                    style={{ color: '#22c55e', backgroundColor: 'rgba(34, 197, 94, 0.12)' }}
+                    title={currentResult.source === 'batch' ? 'Parse successful' : 'Quick parse successful'}
+                    aria-label={currentResult.source === 'batch' ? 'Parse successful' : 'Quick parse successful'}
+                  >
+                    <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
+                    </svg>
                   </span>
                   <span className="text-sm ml-auto mr-2 truncate" style={{ color: 'var(--text-muted)' }}>
-                    {currentResult.templateName} · {currentResult.fileName}
+                    {currentResult.templateName} · {getLeafFileName(currentResult.fileName)}
                   </span>
                 </div>
                 <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)' }}>
-                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#cdd6f4' }}>
+                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>
                     {JSON.stringify(currentResult.result, null, 2)}
                   </pre>
                 </div>
@@ -1137,7 +1217,7 @@ export default function TestResults() {
                   </span>
                   {currentResult && (
                     <span className="text-sm ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
-                      {currentResult.templateName} · {currentResult.fileName}
+                      {currentResult.templateName} · {getLeafFileName(currentResult.fileName)}
                     </span>
                   )}
                 </div>
@@ -1145,7 +1225,7 @@ export default function TestResults() {
                   {currentResult?.errorType && (
                     <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
                   )}
-                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: '#d6d3d1' }}>{currentResult?.error || 'Unknown error'}</pre>
+                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>{currentResult?.error || 'Unknown error'}</pre>
                 </div>
               </div>
             )}
@@ -1176,7 +1256,7 @@ export default function TestResults() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{item.templateName}</p>
-                        <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{item.fileName}</p>
+                        <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{getLeafFileName(item.fileName)}</p>
                         {!item.success && item.error && (
                           <p className="text-xs truncate mt-1" style={{ color: '#ef4444' }}>{item.error}</p>
                         )}

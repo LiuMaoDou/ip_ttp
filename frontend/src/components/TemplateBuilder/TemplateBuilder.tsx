@@ -1,8 +1,9 @@
-import { useRef, useState, useCallback, useEffect } from 'react'
+import { useRef, useState, useCallback, useEffect, type ChangeEvent } from 'react'
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor, IRange, IDisposable } from 'monaco-editor'
+import { saveAs } from 'file-saver'
 import { useStore, getVariableColor, type Variable, type VariableSyntaxMode } from '../../store/useStore'
-import { getParameterPlaceholderDecorations } from '../../utils'
+import { getParameterPlaceholderDecorations, sanitizeFileNameSegment } from '../../utils'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import VariableModal from './VariableModal'
 import GroupModal from './GroupModal'
@@ -142,6 +143,11 @@ function getGroupTrackingRange(
   )
 }
 
+function getTemplateDownloadName(templateName?: string): string {
+  const normalizedName = templateName ? sanitizeFileNameSegment(templateName) : ''
+  return normalizedName ? `${normalizedName}.ttp` : 'template-builder-template.ttp'
+}
+
 export default function TemplateBuilder() {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null)
@@ -185,7 +191,6 @@ export default function TemplateBuilder() {
     addGroup,
     removeGroup,
     setTemplateName,
-    clearVariables,
     newTemplate,
     patterns,
     savedTemplates,
@@ -935,19 +940,46 @@ export default function TemplateBuilder() {
     }
   }, [deleteTemplate])
 
+  const handleTemplateUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) {
+      return
+    }
+
+    const content = await file.text()
+    const uploadedTemplateName = file.name.replace(/\.[^/.]+$/, '').trim()
+
+    useStore.setState({
+      sampleText: '',
+      variables: [],
+      groups: [],
+      generatedTemplate: content,
+      templateName: uploadedTemplateName || 'Imported Template',
+      selectedSavedTemplateId: null
+    })
+  }, [])
+
+  const handleDownloadTemplate = useCallback(() => {
+    if (!generatedTemplate.trim()) {
+      return
+    }
+
+    const blob = new Blob([generatedTemplate], { type: 'text/plain;charset=utf-8' })
+    saveAs(blob, getTemplateDownloadName(templateName))
+  }, [generatedTemplate, templateName])
+
   return (
     <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Header */}
       <div className="page-header">
         <h2>Template Builder</h2>
         <div className="flex gap-2">
-          <button
-            onClick={clearVariables}
-            className="btn"
-            disabled={variables.length === 0 && groups.length === 0}
-          >
-            Clear
-          </button>
+          <label className="btn cursor-pointer">
+            Upload Template
+            <input type="file" accept=".txt,.ttp,.xml" className="hidden" onChange={handleTemplateUpload} />
+          </label>
           <button
             onClick={newTemplate}
             className="btn"
@@ -961,6 +993,13 @@ export default function TemplateBuilder() {
             disabled={variables.length === 0 && groups.length === 0}
           >
             Save
+          </button>
+          <button
+            onClick={handleDownloadTemplate}
+            className="btn"
+            disabled={!generatedTemplate.trim()}
+          >
+            Download Template
           </button>
         </div>
       </div>
@@ -994,8 +1033,10 @@ export default function TemplateBuilder() {
         <div className="flex-1 flex min-w-0">
           {/* Sample Input Editor (Left) */}
           <div className="flex-1 relative border-r" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
-              Sample Input
+            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center gap-2" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
+              <span style={{ color: 'var(--text-secondary)' }}>Sample Input</span>
+              <span style={{ color: 'var(--text-muted)' }}>Right-click selection to</span>
+              <span style={{ color: 'var(--text-primary)' }}>Add Variable or Group</span>
             </div>
             <div className="pt-9 h-full">
               <Editor

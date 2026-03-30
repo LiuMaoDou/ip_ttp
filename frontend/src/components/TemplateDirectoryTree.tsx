@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { TemplateCategory, VendorRecord } from '../services/api'
 
 interface DirectoryTemplate {
@@ -74,30 +74,6 @@ function AddIcon() {
   )
 }
 
-function RenameIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M4 20h4l10-10a2.121 2.121 0 10-3-3L5 17v3z" />
-    </svg>
-  )
-}
-
-function MoveIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8 7l4-4 4 4M8 17l4 4 4-4M17 8l4 4-4 4M7 8l-4 4 4 4M12 4v16M4 12h16" />
-    </svg>
-  )
-}
-
-function DeleteIcon() {
-  return (
-    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M9 7V4a1 1 0 011-1h4a1 1 0 011 1v3M4 7h16" />
-    </svg>
-  )
-}
-
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
     <svg className="w-3.5 h-3.5 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -106,6 +82,23 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
         strokeLinejoin="round"
         strokeWidth={2}
         d={expanded ? 'M6 15l6-6 6 6' : 'M9 6l6 6-6 6'}
+      />
+    </svg>
+  )
+}
+
+function ActionMenuIcon({ active }: { active: boolean }) {
+  return (
+    <svg className="h-3.5 w-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <circle cx="7" cy="10" r="1.7" fill="currentColor" stroke="none" opacity={active ? 1 : 0.92} />
+      <circle cx="12" cy="10" r="1.7" fill="currentColor" stroke="none" opacity={active ? 1 : 0.92} />
+      <circle cx="17" cy="10" r="1.7" fill="currentColor" stroke="none" opacity={active ? 1 : 0.92} />
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.9}
+        d="M9 14.5l3 3 3-3"
+        opacity={active ? 1 : 0.75}
       />
     </svg>
   )
@@ -139,6 +132,13 @@ function IconButton({
   )
 }
 
+interface ActionMenuItem {
+  key: string
+  label: string
+  color?: string
+  onSelect: () => Promise<void> | void
+}
+
 export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplate>({
   title,
   vendors,
@@ -167,6 +167,26 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
   const [moveCategoryPath, setMoveCategoryPath] = useState('')
   const [collapsedVendors, setCollapsedVendors] = useState<Record<string, boolean>>({})
   const [collapsedCategories, setCollapsedCategories] = useState<Record<string, boolean>>({})
+  const [openMenuKey, setOpenMenuKey] = useState<string | null>(null)
+
+  useEffect(() => {
+    const handleWindowClick = () => {
+      setOpenMenuKey(null)
+    }
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenMenuKey(null)
+      }
+    }
+
+    window.addEventListener('click', handleWindowClick)
+    window.addEventListener('keydown', handleEscape)
+
+    return () => {
+      window.removeEventListener('click', handleWindowClick)
+      window.removeEventListener('keydown', handleEscape)
+    }
+  }, [])
 
   const vendorNames = Array.from(new Set([
     ...vendors.map((vendor) => vendor.name),
@@ -331,18 +351,39 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
   const renderTemplate = (template: TTemplate, depth: number) => {
     const isActive = activeTemplateId === template.id
     const isSelected = selectedTemplateIds.includes(template.id)
+    const menuItems: ActionMenuItem[] = []
+    if (!multiSelect && onMoveTemplate) {
+      menuItems.push({
+        key: 'move-template',
+        label: 'Move template',
+        color: 'var(--accent-primary)',
+        onSelect: () => openMoveModal(template)
+      })
+    }
+    if (!multiSelect && onDeleteTemplate) {
+      menuItems.push({
+        key: 'delete-template',
+        label: 'Delete template',
+        color: 'var(--error)',
+        onSelect: () => onDeleteTemplate(template.id)
+      })
+    }
     return (
       <div
         key={template.id}
         className="rounded-md transition-colors"
         style={{
           marginLeft: `${depth * 12}px`,
-          backgroundColor: isActive || isSelected ? 'var(--surface-selected-bg)' : 'transparent',
-          border: isActive || isSelected ? '1px solid var(--surface-selected-border)' : '1px solid transparent'
+          background: isActive || isSelected
+            ? 'linear-gradient(90deg, var(--surface-selected-bg) 0%, var(--surface-selected-bg) 58%, transparent 100%)'
+            : 'linear-gradient(90deg, var(--bg-tertiary) 0%, transparent 100%)',
+          boxShadow: isActive || isSelected
+            ? 'inset 2px 0 0 var(--surface-selected-border)'
+            : 'inset 1px 0 0 var(--border-color)'
         }}
       >
         <div
-          className="flex items-center gap-2 px-2 py-1.5 cursor-pointer"
+          className="flex items-center gap-2 pl-2 pr-1 py-0.5 cursor-pointer"
           onClick={() => {
             if (multiSelect) {
               onTemplateToggle?.(template.id)
@@ -351,39 +392,30 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
             }
           }}
         >
-          {multiSelect && (
-            <input
-              type="checkbox"
-              checked={isSelected}
-              readOnly
-              className="h-3.5 w-3.5 accent-blue-500"
-            />
-          )}
-          <span style={{ color: 'var(--text-muted)' }}>
-            <TemplateIcon />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{template.name}</div>
-            {renderTemplateMeta ? (
-              <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{renderTemplateMeta(template)}</div>
-            ) : template.description ? (
-              <div className="text-xs truncate mt-1" style={{ color: 'var(--text-muted)' }}>{template.description}</div>
-            ) : null}
-          </div>
-          {!multiSelect && (onMoveTemplate || onDeleteTemplate) && (
-            <div className="flex items-center gap-0.5">
-              {onMoveTemplate && (
-                <IconButton title="Move template" color="var(--accent-primary)" onClick={() => openMoveModal(template)}>
-                  <MoveIcon />
-                </IconButton>
-              )}
-              {onDeleteTemplate && (
-                <IconButton title="Delete template" color="var(--text-muted)" onClick={() => { void onDeleteTemplate(template.id) }}>
-                  <DeleteIcon />
-                </IconButton>
-              )}
+          <div
+            className="flex min-w-0 flex-1 items-center gap-2"
+          >
+            {multiSelect && (
+              <input
+                type="checkbox"
+                checked={isSelected}
+                readOnly
+                className="h-3.5 w-3.5 accent-blue-500"
+              />
+            )}
+            <span style={{ color: 'var(--text-muted)' }}>
+              <TemplateIcon />
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{template.name}</div>
+              {renderTemplateMeta ? (
+                <div className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>{renderTemplateMeta(template)}</div>
+              ) : template.description ? (
+                <div className="text-xs truncate mt-1" style={{ color: 'var(--text-muted)' }}>{template.description}</div>
+              ) : null}
             </div>
-          )}
+          </div>
+          {menuItems.length > 0 && renderActionMenu(`template:${template.id}`, menuItems)}
         </div>
       </div>
     )
@@ -395,19 +427,55 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
       .sort((left, right) => left.name.localeCompare(right.name))
     const hasChildren = directTemplates.length > 0 || category.children.length > 0
     const isCollapsed = collapsedCategories[category.id] ?? false
+    const categoryMenuItems: ActionMenuItem[] = []
+    if (manageDirectories) {
+      if (onCreateCategory) {
+        categoryMenuItems.push({
+          key: 'add-folder',
+          label: 'Add folder',
+          color: 'var(--accent-primary)',
+          onSelect: () => handlePromptCreateCategory(vendor, category.id)
+        })
+      }
+      if (onRenameCategory) {
+        categoryMenuItems.push({
+          key: 'rename-folder',
+          label: 'Rename folder',
+          onSelect: () => handlePromptRenameCategory(category)
+        })
+        categoryMenuItems.push({
+          key: 'move-folder',
+          label: 'Move folder',
+          onSelect: () => handlePromptMoveCategory(category)
+        })
+      }
+      if (onDeleteCategory) {
+        categoryMenuItems.push({
+          key: 'delete-folder',
+          label: 'Delete folder',
+          color: 'var(--error)',
+          onSelect: () => handlePromptDeleteCategory(category)
+        })
+      }
+    }
 
     return (
       <div key={category.id} className="space-y-0.5">
         <div
           className="flex items-center justify-between gap-2 px-1 py-0.5"
-          style={{ marginLeft: `${depth * 12}px` }}
           onClick={() => {
             if (hasChildren) {
               toggleCategoryCollapsed(category.id)
             }
           }}
         >
-          <div className="text-sm truncate flex items-center gap-2" style={{ color: 'var(--text-secondary)' }}>
+          <div
+            className="min-w-0 flex flex-1 items-center gap-2 text-sm truncate"
+            style={{
+              color: 'var(--text-secondary)',
+              paddingLeft: `${depth * 12}px`
+            }}
+          >
             <span style={{ color: 'var(--text-muted)' }}>
               <ChevronIcon expanded={!isCollapsed} />
             </span>
@@ -416,28 +484,70 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
             </span>
             <span>{category.name}</span>
           </div>
-          {manageDirectories && (
-            <div className="flex items-center gap-0.5">
-              <IconButton title="Add folder" color="var(--accent-primary)" onClick={() => { void handlePromptCreateCategory(vendor, category.id) }}>
-                <AddIcon />
-              </IconButton>
-              <IconButton title="Rename folder" color="var(--text-muted)" onClick={() => { void handlePromptRenameCategory(category) }}>
-                <RenameIcon />
-              </IconButton>
-              <IconButton title="Move folder" color="var(--text-muted)" onClick={() => { void handlePromptMoveCategory(category) }}>
-                <MoveIcon />
-              </IconButton>
-              <IconButton title="Delete folder" color="var(--error)" onClick={() => { void handlePromptDeleteCategory(category) }}>
-                <DeleteIcon />
-              </IconButton>
-            </div>
-          )}
+          {categoryMenuItems.length > 0 && renderActionMenu(`category:${category.id}`, categoryMenuItems)}
         </div>
         {!isCollapsed && (
           <>
             {directTemplates.map((template) => renderTemplate(template, depth + 1))}
             {category.children.map((child) => renderCategory(child, vendor, depth + 1))}
           </>
+        )}
+      </div>
+    )
+  }
+
+  const renderActionMenu = (menuKey: string, items: ActionMenuItem[]) => {
+    if (items.length === 0) {
+      return null
+    }
+
+    return (
+      <div
+        className="relative ml-auto flex w-7 flex-shrink-0 justify-end self-center"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <button
+          type="button"
+          title="More actions"
+          aria-label="More actions"
+          className="inline-flex h-6 w-6 items-center justify-center rounded-md border transition-colors"
+          style={{
+            color: openMenuKey === menuKey ? 'var(--accent-primary)' : 'var(--text-secondary)',
+            backgroundColor: openMenuKey === menuKey ? 'var(--surface-selected-bg)' : 'var(--bg-tertiary)',
+            borderColor: openMenuKey === menuKey ? 'var(--surface-selected-border)' : 'var(--border-color)'
+          }}
+          onClick={() => {
+            setOpenMenuKey((current) => current === menuKey ? null : menuKey)
+          }}
+        >
+          <ActionMenuIcon active={openMenuKey === menuKey} />
+        </button>
+        {openMenuKey === menuKey && (
+          <div
+            className="absolute right-0 top-full mt-1 min-w-[9rem] rounded-md border py-1 shadow-lg z-20"
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderColor: 'var(--border-color)'
+            }}
+          >
+            {items.map((item) => (
+              <button
+                key={item.key}
+                type="button"
+                className="w-full text-left px-3 py-1.5 text-xs transition-colors"
+                style={{
+                  color: item.color || 'var(--text-primary)',
+                  backgroundColor: 'transparent'
+                }}
+                onClick={() => {
+                  setOpenMenuKey(null)
+                  void item.onSelect()
+                }}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
         )}
       </div>
     )
@@ -472,6 +582,32 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
             const categoryTree = buildCategoryTree(vendor)
             const hasContent = rootTemplates.length > 0 || categoryTree.length > 0
             const isCollapsed = collapsedVendors[vendor] ?? false
+            const vendorMenuItems: ActionMenuItem[] = []
+            if (manageDirectories) {
+              if (onCreateCategory) {
+                vendorMenuItems.push({
+                  key: 'add-folder',
+                  label: 'Add folder',
+                  color: 'var(--accent-primary)',
+                  onSelect: () => handlePromptCreateCategory(vendor, null)
+                })
+              }
+              if (onRenameVendor) {
+                vendorMenuItems.push({
+                  key: 'rename-vendor',
+                  label: 'Rename vendor',
+                  onSelect: () => handlePromptRenameVendor(vendor)
+                })
+              }
+              if (onDeleteVendor) {
+                vendorMenuItems.push({
+                  key: 'delete-vendor',
+                  label: 'Delete vendor',
+                  color: 'var(--error)',
+                  onSelect: () => handlePromptDeleteVendor(vendor)
+                })
+              }
+            }
             if (!hasContent && !manageDirectories) {
               return null
             }
@@ -494,19 +630,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
                     </span>
                     <span>{vendor}</span>
                   </div>
-                  {manageDirectories && (
-                    <div className="flex items-center gap-0.5">
-                      <IconButton title="Add folder" color="var(--accent-primary)" onClick={() => { void handlePromptCreateCategory(vendor, null) }}>
-                        <AddIcon />
-                      </IconButton>
-                      <IconButton title="Rename vendor" color="var(--text-muted)" onClick={() => { void handlePromptRenameVendor(vendor) }}>
-                        <RenameIcon />
-                      </IconButton>
-                      <IconButton title="Delete vendor" color="var(--error)" onClick={() => { void handlePromptDeleteVendor(vendor) }}>
-                        <DeleteIcon />
-                      </IconButton>
-                    </div>
-                  )}
+                  {vendorMenuItems.length > 0 && renderActionMenu(`vendor:${vendor}`, vendorMenuItems)}
                 </div>
                 {!isCollapsed && rootTemplates.map((template) => renderTemplate(template, 1))}
                 {!isCollapsed && categoryTree.map((category) => renderCategory(category, vendor, 1))}

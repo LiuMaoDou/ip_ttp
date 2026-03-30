@@ -1119,7 +1119,7 @@ export const useStore = create<AppState>()(
         try {
           const results = await renderGenerationFiles(
             draftTemplate,
-            state.generationUploadedFiles.map((file) => file.file),
+            state.generationUploadedFiles.map((file) => ({ file: file.file, name: file.name })),
             state.selectedGenerationTemplateId
           )
           set({ generationResults: results, selectedGenerationResultIndex: 0 })

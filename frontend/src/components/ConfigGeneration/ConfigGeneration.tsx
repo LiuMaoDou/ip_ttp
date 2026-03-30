@@ -15,7 +15,7 @@ import {
   type Variable,
   type Group
 } from '../../store/useStore'
-import { formatFileSize, getParameterPlaceholderDecorations, sanitizeFileNameSegment } from '../../utils'
+import { getParameterPlaceholderDecorations, sanitizeFileNameSegment } from '../../utils'
 
 interface CurrentSelection {
   text: string
@@ -52,6 +52,19 @@ function getGeneratedFileName(fileName: string, templateName?: string): string {
 function getTemplateDownloadName(templateName?: string): string {
   const normalizedName = templateName ? sanitizeFileNameSegment(templateName) : ''
   return normalizedName ? `${normalizedName}.j2` : 'generation-template.j2'
+}
+
+function getSampleJsonDownloadName(): string {
+  return 'sample-generation-input.json'
+}
+
+function UploadedJsonIcon() {
+  return (
+    <svg className="h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M7 3.75h7.879a2 2 0 011.414.586l2.371 2.371A2 2 0 0119.25 8.12V18.25A2.75 2.75 0 0116.5 21h-9A2.75 2.75 0 014.75 18.25v-11.75A2.75 2.75 0 017.5 3.75z" />
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M8.75 11.25h6.5M8.75 15.25h5" />
+    </svg>
+  )
 }
 
 function compareGroups(a: Group, b: Group) {
@@ -91,6 +104,82 @@ function deriveBindableSelectors(savedTemplate: SavedTemplate, sourceTemplate: G
       templateLabel: [savedTemplate.vendor, ...(savedTemplate.categoryPath || []), savedTemplate.name].filter(Boolean).join(' / '),
       variableName: variable.name,
       groupPath
+    }
+  })
+}
+
+function getSampleValue(variableName: string): string {
+  const normalizedName = variableName
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+
+  return `sample_${normalizedName || 'value'}`
+}
+
+function ensureObjectPath(root: Record<string, unknown>, path: string[]): Record<string, unknown> {
+  return path.reduce<Record<string, unknown>>((current, segment) => {
+    if (!segment) {
+      return current
+    }
+
+    const existing = current[segment]
+    if (!existing || typeof existing !== 'object' || Array.isArray(existing)) {
+      current[segment] = {}
+    }
+
+    return current[segment] as Record<string, unknown>
+  }, root)
+}
+
+function buildTemplateSample(savedTemplate: SavedTemplate, sourceTemplate: GenerationSourceTemplate): Record<string, unknown> {
+  const variables = (savedTemplate.variables || []) as unknown as Variable[]
+  const groups = (savedTemplate.groups || []) as unknown as Group[]
+  const sample: Record<string, unknown> = {}
+
+  variables.forEach((variable) => {
+    if ((variable.syntaxMode || 'variable') !== 'variable' || !variable.name?.trim()) {
+      return
+    }
+
+    const groupPath = getContainingGroups(variable, groups).map((group) => group.name)
+    const parent = ensureObjectPath(sample, groupPath)
+    if (parent[variable.name] === undefined) {
+      parent[variable.name] = getSampleValue(variable.name)
+    }
+  })
+
+  return { [sourceTemplate.templateAlias]: sample }
+}
+
+function mergeBindingPathsIntoSample(
+  sample: Record<string, unknown>,
+  bindings: GenerationBinding[]
+) {
+  bindings.forEach((binding) => {
+    const alias = binding.reference.templateAlias?.trim()
+    const variableName = binding.reference.variableName?.trim()
+
+    if (!alias) {
+      return
+    }
+
+    if (!sample[alias] || typeof sample[alias] !== 'object' || Array.isArray(sample[alias])) {
+      sample[alias] = {}
+    }
+
+    if (!variableName) {
+      return
+    }
+
+    const parent = ensureObjectPath(
+      sample[alias] as Record<string, unknown>,
+      binding.reference.groupPath || []
+    )
+
+    if (parent[variableName] === undefined) {
+      parent[variableName] = getSampleValue(variableName)
     }
   })
 }
@@ -240,6 +329,8 @@ export default function ConfigGeneration() {
   const [templateVendorInput, setTemplateVendorInput] = useState('Unassigned')
   const [templateCategoryInput, setTemplateCategoryInput] = useState('')
   const [showSaveModal, setShowSaveModal] = useState(false)
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false)
+  const [showBindingsPanel, setShowBindingsPanel] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [isNewVendor, setIsNewVendor] = useState(false)
   const [newVendorInput, setNewVendorInput] = useState('')
@@ -262,6 +353,7 @@ export default function ConfigGeneration() {
     setSelectedGenerationSourceTemplateIds,
     currentGenerationTemplateVendor,
     currentGenerationTemplateCategoryPath,
+    setCurrentGenerationTemplateDirectory,
     generationUploadedFiles,
     addGenerationUploadedFile,
     removeGenerationUploadedFile,
@@ -269,8 +361,6 @@ export default function ConfigGeneration() {
     setSelectedGenerationFileId,
     clearGenerationUploadedFiles,
     generationResults,
-    selectedGenerationResultIndex,
-    setSelectedGenerationResultIndex,
     runGeneration,
     isGeneratingConfig,
     savedTemplates,
@@ -306,6 +396,7 @@ export default function ConfigGeneration() {
     () => deriveSourceTemplates(savedTemplates, selectedGenerationSourceTemplateIds),
     [savedTemplates, selectedGenerationSourceTemplateIds]
   )
+  const totalParseTemplateOptions = savedTemplates.length
 
   const bindableSelectors = useMemo(() => {
     return sourceTemplates.flatMap((sourceTemplate) => {
@@ -316,6 +407,8 @@ export default function ConfigGeneration() {
       return deriveBindableSelectors(savedTemplate, sourceTemplate)
     })
   }, [savedTemplates, sourceTemplates])
+
+  const canDownloadSampleJson = sourceTemplates.length > 0 || generationBindings.length > 0
 
   const selectedGenerationTemplate = useMemo(
     () => generationTemplates.find((template) => template.id === selectedGenerationTemplateId) || null,
@@ -341,9 +434,6 @@ export default function ConfigGeneration() {
       }
     }
   }, [generationTemplateText, generationBindings])
-
-  const currentResult = generationResults[selectedGenerationResultIndex] || generationResults[0] || null
-  const previewFile = generationUploadedFiles.find((file) => file.id === selectedGenerationFileId) || generationUploadedFiles[0] || null
 
   const handleEditorMount: OnMount = (editorInstance, monaco) => {
     editorRef.current = editorInstance
@@ -579,6 +669,19 @@ export default function ConfigGeneration() {
     ))
   }
 
+  const handleSelectAllSourceTemplates = () => {
+    const allTemplateIds = savedTemplates.map((template) => template.id)
+    if (allTemplateIds.length === 0) {
+      return
+    }
+
+    const isAllSelected =
+      selectedGenerationSourceTemplateIds.length === allTemplateIds.length &&
+      allTemplateIds.every((templateId) => selectedGenerationSourceTemplateIds.includes(templateId))
+
+    setSelectedGenerationSourceTemplateIds(isAllSelected ? [] : allTemplateIds)
+  }
+
   const handleOpenSaveModal = () => {
     setTemplateNameInput(selectedGenerationTemplate?.name || '')
     setTemplateVendorInput(selectedGenerationTemplate?.vendor || currentGenerationTemplateVendor || 'Unassigned')
@@ -589,6 +692,29 @@ export default function ConfigGeneration() {
     setNewCategoryInput('')
     setShowSaveModal(true)
   }
+
+  const handleNewTemplate = useCallback(() => {
+    setGenerationTemplateText('')
+    setGenerationBindings([])
+    setSelectedGenerationTemplateId(null)
+    setSelectedGenerationSourceTemplateIds([])
+    setCurrentGenerationTemplateDirectory('Unassigned', [])
+    setTemplateNameInput('')
+    setTemplateVendorInput('Unassigned')
+    setTemplateCategoryInput('')
+    setIsNewVendor(false)
+    setNewVendorInput('')
+    setIsNewCategory(false)
+    setNewCategoryInput('')
+    setShowSaveModal(false)
+    setGenerateStatus(null)
+  }, [
+    setCurrentGenerationTemplateDirectory,
+    setGenerationBindings,
+    setGenerationTemplateText,
+    setSelectedGenerationSourceTemplateIds,
+    setSelectedGenerationTemplateId
+  ])
 
   const handleSave = async () => {
     if (!templateNameInput.trim()) {
@@ -642,7 +768,7 @@ export default function ConfigGeneration() {
       const firstError = latestResults.find((r) => !r.success)
       setGenerateStatus({ ok: false, msg: firstError?.error ?? 'Generation failed.' })
     } else {
-      setGenerateStatus({ ok: true, msg: `${successCount} succeeded, ${failCount} failed — see results panel.` })
+      setGenerateStatus({ ok: true, msg: `${successCount} succeeded, ${failCount} failed.` })
     }
   }
 
@@ -657,15 +783,29 @@ export default function ConfigGeneration() {
     saveAs(blob, getTemplateDownloadName(generationTemplateDisplayName))
   }
 
-  const handleDownloadSingle = (resultIndex: number) => {
-    const result = generationResults[resultIndex]
-    if (!result?.success || !result.generatedText) {
+  const handleDownloadSampleJson = useCallback(() => {
+    if (!canDownloadSampleJson) {
       return
     }
 
-    const blob = new Blob([result.generatedText], { type: 'text/plain;charset=utf-8' })
-    saveAs(blob, getGeneratedFileName(result.fileName, generationTemplateDisplayName))
-  }
+    const samplePayload = sourceTemplates.reduce<Record<string, unknown>>((current, sourceTemplate) => {
+      const savedTemplate = savedTemplates.find((template) => template.id === sourceTemplate.templateId)
+      if (!savedTemplate) {
+        current[sourceTemplate.templateAlias] = {}
+        return current
+      }
+
+      Object.assign(current, buildTemplateSample(savedTemplate, sourceTemplate))
+      return current
+    }, {})
+
+    mergeBindingPathsIntoSample(samplePayload, generationBindings)
+
+    const blob = new Blob([JSON.stringify(samplePayload, null, 2)], {
+      type: 'application/json;charset=utf-8'
+    })
+    saveAs(blob, getSampleJsonDownloadName())
+  }, [canDownloadSampleJson, generationBindings, savedTemplates, sourceTemplates])
 
   const handleDownloadAll = async () => {
     const successfulResults = generationResults.filter((result) => result.success && typeof result.generatedText === 'string')
@@ -817,12 +957,22 @@ export default function ConfigGeneration() {
           onCancel={handleBindingModalCancel}
         />
       )}
-      <div className="flex flex-col h-full text-sm" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
+      <div className="flex flex-col h-full text-sm relative" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
         <div className="page-header">
           <div className="flex items-center gap-3 min-w-0">
-            <h2>Config Generation (Not Ready)</h2>
-            <span className="text-xs px-2 py-1 rounded" style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--text-secondary)' }}>
-              Experimental
+            <h2>Config Generation</h2>
+            <div
+              className="h-5 border-l border-dashed"
+              style={{ borderColor: 'var(--border-color)' }}
+            />
+            <button
+              onClick={() => setShowTemplateSelector(true)}
+              className="btn"
+            >
+              Templates
+            </button>
+            <span className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+              {selectedGenerationSourceTemplateIds.length}/{totalParseTemplateOptions} selected
             </span>
           </div>
           <div className="flex gap-2 items-center">
@@ -830,6 +980,13 @@ export default function ConfigGeneration() {
               Upload Template
               <input type="file" accept=".txt,.cfg,.conf,.jinja,.j2" className="hidden" onChange={handleTemplateUpload} />
             </label>
+            <button
+              className="btn"
+              onClick={handleNewTemplate}
+              disabled={!generationTemplateText.trim() && generationBindings.length === 0 && !selectedGenerationTemplateId && selectedGenerationSourceTemplateIds.length === 0 && !templateNameInput.trim()}
+            >
+              New
+            </button>
             <button
               className="btn"
               onClick={() => void handleOpenSaveModal()}
@@ -870,38 +1027,24 @@ export default function ConfigGeneration() {
         }}
       >
         <div className="border-r row-span-2 overflow-auto" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div className="border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <TemplateDirectoryTree
-              title="Generation Templates"
-              vendors={vendors}
-              categories={generationCategories}
-              templates={generationTemplates}
-              loading={isLoadingGenerationTemplates || isLoadingTemplateDirectories}
-              emptyText="No saved generation templates"
-              activeTemplateId={selectedGenerationTemplateId}
-              manageDirectories
-              onTemplateClick={(templateId) => { void handleLoad(templateId) }}
-              onMoveTemplate={(templateId, vendor, categoryPath) => useStore.getState().moveGenerationTemplate(templateId, vendor, categoryPath)}
-              onDeleteTemplate={(templateId) => { void handleDelete(templateId) }}
-              onCreateVendor={(name) => useStore.getState().createVendor(name)}
-              onRenameVendor={(currentName, nextName) => useStore.getState().renameVendor(currentName, nextName)}
-              onDeleteVendor={(name) => useStore.getState().deleteVendor(name)}
-              onCreateCategory={(vendor, name, parentId) => useStore.getState().createCategory('generation', vendor, name, parentId)}
-              onRenameCategory={(categoryId, vendor, name, parentId) => useStore.getState().updateCategory('generation', categoryId, vendor, name, parentId)}
-              onDeleteCategory={(categoryId) => useStore.getState().deleteCategory('generation', categoryId)}
-            />
-          </div>
-
           <TemplateDirectoryTree
-            title="Parse Templates"
+            title="Generation Templates"
             vendors={vendors}
-            categories={parseCategories}
-            templates={savedTemplates}
-            loading={isLoadingTemplateDirectories}
-            emptyText="No parse templates"
-            selectedTemplateIds={selectedGenerationSourceTemplateIds}
-            multiSelect
-            onTemplateToggle={toggleSourceTemplate}
+            categories={generationCategories}
+            templates={generationTemplates}
+            loading={isLoadingGenerationTemplates || isLoadingTemplateDirectories}
+            emptyText="No saved generation templates"
+            activeTemplateId={selectedGenerationTemplateId}
+            manageDirectories
+            onTemplateClick={(templateId) => { void handleLoad(templateId) }}
+            onMoveTemplate={(templateId, vendor, categoryPath) => useStore.getState().moveGenerationTemplate(templateId, vendor, categoryPath)}
+            onDeleteTemplate={(templateId) => { void handleDelete(templateId) }}
+            onCreateVendor={(name) => useStore.getState().createVendor(name)}
+            onRenameVendor={(currentName, nextName) => useStore.getState().renameVendor(currentName, nextName)}
+            onDeleteVendor={(name) => useStore.getState().deleteVendor(name)}
+            onCreateCategory={(vendor, name, parentId) => useStore.getState().createCategory('generation', vendor, name, parentId)}
+            onRenameCategory={(categoryId, vendor, name, parentId) => useStore.getState().updateCategory('generation', categoryId, vendor, name, parentId)}
+            onDeleteCategory={(categoryId) => useStore.getState().deleteCategory('generation', categoryId)}
           />
         </div>
 
@@ -943,8 +1086,14 @@ export default function ConfigGeneration() {
           </div>
 
           <div className="border-l flex flex-col min-h-0" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="h-11 px-4 border-b flex items-center" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="h-11 px-4 border-b flex items-center justify-between gap-3" style={{ borderColor: 'var(--border-color)' }}>
               <h3 className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Rendered Template Preview</h3>
+              <button
+                className="btn text-xs"
+                onClick={() => setShowBindingsPanel(true)}
+              >
+                Bindings {generationBindings.length}
+              </button>
             </div>
             <div className="flex-1 min-h-0">
               <Editor
@@ -978,34 +1127,127 @@ export default function ConfigGeneration() {
           </div>
         </div>
 
-        <div className="row-span-2 flex flex-col min-h-0" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-          <div className="p-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Bindings</h3>
-              <button className="btn text-xs" onClick={() => setGenerationBindings([])} disabled={generationBindings.length === 0}>Clear</button>
-            </div>
-            <div className="space-y-2 max-h-56 overflow-auto">
-              {generationBindings.length === 0 ? (
-                <p style={{ color: 'var(--text-muted)' }}>No bindings yet.</p>
-              ) : generationBindings.map((binding) => (
-                <div key={binding.id} className="p-2 rounded border" style={{ borderColor: 'var(--border-color)' }}>
-                  <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>{binding.originalText}</div>
-                  <div className="text-sm break-all">{binding.reference.selector}</div>
-                  <div className="text-xs break-all mt-1" style={{ color: 'var(--accent-primary)' }}>{binding.reference.expression}</div>
-                  <button className="mt-2 text-xs" style={{ color: 'var(--error)' }} onClick={() => removeBinding(binding.id)}>Remove</button>
+        {showBindingsPanel && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center p-6"
+            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+          >
+            <div
+              className="w-full max-w-xl max-h-[85vh] overflow-auto rounded-xl border shadow-xl p-4"
+              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+            >
+              <div className="flex items-start justify-between mb-3 pt-1">
+                <div>
+                  <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Review and remove the current parse bindings.</p>
                 </div>
-              ))}
+                <div className="flex gap-2 mt-0.5">
+                  <button className="btn" onClick={() => setGenerationBindings([])} disabled={generationBindings.length === 0}>Clear</button>
+                  <button className="btn" onClick={() => setShowBindingsPanel(false)}>Close</button>
+                </div>
+              </div>
+              <div className="space-y-2">
+                {generationBindings.length === 0 ? (
+                  <p style={{ color: 'var(--text-muted)' }}>No bindings yet.</p>
+                ) : generationBindings.map((binding) => (
+                  <div key={binding.id} className="group p-2 rounded border" style={{ borderColor: 'var(--border-color)' }}>
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="min-w-0 flex-1 text-sm truncate" title={binding.originalText}>
+                        {binding.originalText}
+                      </div>
+                      <div
+                        className="h-4 border-l border-dashed flex-shrink-0"
+                        style={{ borderColor: 'var(--border-color)' }}
+                      />
+                      <div
+                        className="min-w-0 flex-1 text-sm truncate"
+                        style={{ color: 'var(--accent-primary)' }}
+                        title={binding.reference.expression}
+                      >
+                        {binding.reference.expression}
+                      </div>
+                      <button
+                        className="flex-shrink-0 opacity-40 transition-opacity hover:opacity-100 group-hover:opacity-100"
+                        style={{ color: 'var(--text-muted)' }}
+                        onClick={() => removeBinding(binding.id)}
+                        title="Remove binding"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
+        )}
 
-          <div className="p-3 border-b" style={{ borderColor: 'var(--border-color)' }}>
-            <h3 className="text-sm font-medium mb-2" style={{ color: 'var(--text-secondary)' }}>Parsed JSON Upload</h3>
+        {showTemplateSelector && (
+          <div
+            className="absolute inset-0 z-30 flex items-center justify-center p-6"
+            style={{ backgroundColor: 'var(--overlay-backdrop)' }}
+          >
+            <div
+              className="w-full max-w-3xl max-h-[85vh] overflow-auto rounded-xl border shadow-xl p-4"
+              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+            >
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Template Selection</h3>
+                  <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Choose one or more templates for parse bindings.</p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={handleSelectAllSourceTemplates} className="btn">Toggle All</button>
+                  <button onClick={() => setShowTemplateSelector(false)} className="btn">Close</button>
+                </div>
+              </div>
+
+              <TemplateDirectoryTree
+                title="Parse Templates"
+                vendors={vendors}
+                categories={parseCategories}
+                templates={savedTemplates}
+                loading={isLoadingTemplateDirectories}
+                emptyText="No parse templates"
+                selectedTemplateIds={selectedGenerationSourceTemplateIds}
+                multiSelect
+                onTemplateToggle={toggleSourceTemplate}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="row-span-2 flex flex-col min-h-0" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+          <div className="flex-1 min-h-0 p-3 flex flex-col" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Files</h3>
+              <div className="flex items-center gap-2">
+                <button
+                  className="btn text-xs"
+                  onClick={handleDownloadSampleJson}
+                  disabled={!canDownloadSampleJson}
+                >
+                  Sample
+                </button>
+                <button
+                  className="btn text-xs"
+                  onClick={clearGenerationUploadedFiles}
+                  disabled={generationUploadedFiles.length === 0}
+                >
+                  Clear
+                </button>
+                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  {generationUploadedFiles.length}
+                </span>
+              </div>
+            </div>
             <div
               {...getRootProps()}
-              className="p-4 border-2 border-dashed rounded-lg cursor-pointer transition-colors"
+              className="px-3 py-2 mx-2 mt-2 border border-dashed rounded-lg cursor-pointer transition-colors"
               style={{
                 borderColor: isDragActive ? '#3b82f6' : 'var(--border-color)',
-                backgroundColor: isDragActive ? 'rgba(59, 130, 246, 0.1)' : 'transparent'
+                backgroundColor: isDragActive ? 'rgba(59, 130, 246, 0.06)' : 'transparent'
               }}
             >
               <input {...getInputProps()} />
@@ -1013,80 +1255,46 @@ export default function ConfigGeneration() {
                 {isDragActive ? 'Drop JSON files here' : 'Drop JSON files or click'}
               </p>
             </div>
-            <div className="mt-2 space-y-1 max-h-32 overflow-auto">
+            <div className="mt-2 flex-1 min-h-0 space-y-1 overflow-auto">
               {generationUploadedFiles.map((file) => {
                 const isSelected = file.id === selectedGenerationFileId
                 return (
                   <div
                     key={file.id}
-                    className="p-2 rounded border cursor-pointer flex items-center justify-between gap-2"
+                    className="p-2 rounded cursor-pointer flex items-center justify-between gap-2 transition-colors"
                     style={{
-                      borderColor: isSelected ? 'var(--accent-primary)' : 'var(--border-color)',
-                      backgroundColor: isSelected ? 'var(--surface-selected-bg)' : 'transparent'
+                      background: isSelected
+                        ? 'linear-gradient(90deg, var(--surface-selected-bg) 0%, var(--surface-selected-bg) 58%, transparent 100%)'
+                        : 'linear-gradient(90deg, var(--bg-tertiary) 0%, transparent 100%)',
+                      boxShadow: isSelected
+                        ? 'inset 2px 0 0 var(--surface-selected-border)'
+                        : 'inset 1px 0 0 var(--border-color)'
                     }}
                     onClick={() => setSelectedGenerationFileId(file.id)}
                   >
-                    <div className="min-w-0">
-                      <div className="truncate">{file.name}</div>
-                      <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{formatFileSize(file.size)}</div>
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span style={{ color: 'var(--text-muted)' }}>
+                        <UploadedJsonIcon />
+                      </span>
+                      <div className="min-w-0 truncate">{file.name}</div>
                     </div>
                     <button
-                      className="text-xs"
+                      className="flex-shrink-0 opacity-40 transition-opacity hover:opacity-100"
+                      style={{ color: 'var(--text-muted)' }}
                       onClick={(event) => {
                         event.stopPropagation()
                         removeGenerationUploadedFile(file.id)
                       }}
+                      title="Remove file"
                     >
-                      Remove
+                      <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
                     </button>
                   </div>
                 )
               })}
             </div>
-            <div className="mt-2 flex gap-2">
-              <button className="btn" onClick={clearGenerationUploadedFiles} disabled={generationUploadedFiles.length === 0}>Clear Files</button>
-            </div>
-            {previewFile && (
-              <pre className="mt-3 text-xs whitespace-pre-wrap rounded p-3 overflow-auto max-h-40" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)', color: 'var(--text-primary)' }}>
-                {previewFile.content}
-              </pre>
-            )}
-          </div>
-
-          <div className="p-3 flex-1 min-h-0 overflow-auto">
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Generation Results</h3>
-              {currentResult?.success && currentResult.generatedText && (
-                <button className="btn" onClick={() => handleDownloadSingle(selectedGenerationResultIndex)}>
-                  Download Current
-                </button>
-              )}
-            </div>
-            <div className="space-y-1 mb-3">
-              {generationResults.map((result, index) => (
-                <button
-                  key={`${result.fileName}-${index}`}
-                  className="w-full text-left p-2 rounded border"
-                  style={{
-                    borderColor: selectedGenerationResultIndex === index ? 'var(--accent-primary)' : 'var(--border-color)',
-                    backgroundColor: selectedGenerationResultIndex === index ? 'var(--surface-selected-bg)' : 'transparent'
-                  }}
-                  onClick={() => setSelectedGenerationResultIndex(index)}
-                >
-                  <div className="truncate">{result.fileName}</div>
-                  <div className="text-xs" style={{ color: result.success ? 'var(--success)' : 'var(--error)' }}>
-                    {result.success ? 'Generated' : result.error || 'Failed'}
-                  </div>
-                </button>
-              ))}
-            </div>
-            <pre className="text-xs whitespace-pre-wrap rounded p-3 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)', color: 'var(--text-primary)', minHeight: '8rem' }}>
-              {currentResult
-                ? currentResult.success
-                  ? currentResult.generatedText
-                  : `${currentResult.errorType || 'Error'}: ${currentResult.error || 'Unknown error'}`
-                : 'No generation results yet.'}
-            </pre>
           </div>
         </div>
         </div>
