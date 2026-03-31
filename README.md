@@ -1,195 +1,122 @@
-[![Downloads](https://pepy.tech/badge/ttp)](https://pepy.tech/project/ttp)
-[![PyPI versions](https://img.shields.io/pypi/pyversions/ttp.svg)](https://pypi.python.org/pypi/ttp/)
-[![Documentation status](https://readthedocs.org/projects/ttp/badge/?version=latest)](http://ttp.readthedocs.io/?badge=latest)
-[![Tests](https://github.com/dmulyalin/ttp/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/dmulyalin/ttp/actions/workflows/main.yml)
+# TTP Web UI
 
-# Template Text Parser
+一个基于 [TTP (Template Text Parser)](https://github.com/dmulyalin/ttp) 的可视化 Web 应用，提供交互式模板构建、文本解析测试和配置生成功能。
 
-TTP is a Python library for semi-structured text parsing using templates.
+> **致谢 / Acknowledgements**
+>
+> 本项目的核心解析引擎来源于 [dmulyalin/ttp](https://github.com/dmulyalin/ttp)，感谢作者及社区贡献者在 TTP 项目上的出色工作，使得半结构化文本解析变得如此简单高效。
+>
+> The core parsing engine is powered by [dmulyalin/ttp](https://github.com/dmulyalin/ttp). We are grateful to the author and community contributors for their excellent work on the TTP project.
 
-## Why?
+## 项目概览
 
-To save ones time on transforming raw text into structured data and beyond.
+本仓库包含两个相关部分：
 
-## How?
+1. **TTP 核心库** (`ttp/`) — 原始 TTP Python 解析器，将模板语法转换为正则驱动的解析结果。
+2. **TTP Web UI** (`backend/` + `frontend/`) — 基于 FastAPI + React 的 Web 应用，用于交互式构建模板、测试解析输出并持久化保存模板。
 
-Regexes, regexes everywhere... but, dynamically formed out of TTP templates with added capabilities to simplify the  process of getting desired outcome.
+## 功能特性
 
-## What?
+- **模板构建器** — 可视化编辑 TTP 模板，支持变量、分组的右键创建与范围跟踪
+- **测试与结果** — 对一个或多个模板批量测试输入文件，支持 JSON / CSV / Checkup CSV 下载
+- **配置生成** — 基于已解析数据渲染 Jinja2 配置模板，支持多源模板绑定与批量渲染
 
-In essence TTP can help to:
-  - Prepare, sort and load text data for parsing
-  - Parse text using regexes dynamically derived out of templates
-  - Process matches on the fly using broad set of built-in or custom functions
-  - Combine match results in a structure with arbitrary hierarchy
-  - Transform results in desired format to ease consumption by humans or machines
-  - Return results to various destinations for storage or further processing
+## 快速开始
 
-Reference [documentation](https://ttp.readthedocs.io) for more information.
+### 环境要求
 
-TTP [Networktocode Slack channel](https://networktocode.slack.com/archives/C018HMJQECB)
+- Python 3.8+
+- Node.js 18+
+- Poetry
 
-Collection of [TTP Templates](https://github.com/dmulyalin/ttp_templates)
+### 一键启动（开发模式）
 
-## Example - as simple as it can be
+```bash
+# Linux / macOS
+./start-dev.sh
 
-Simple interfaces configuration parsing example
-
-<details><summary>Code</summary>
-
-```python
-from ttp import ttp
-import pprint
-
-data = """
-interface Loopback0
- description Router-id-loopback
- ip address 192.168.0.113/24
-!
-interface Vlan778
- description CPE_Acces_Vlan
- ip address 2002::fd37/124
- ip vrf CPE1
-!
-"""
-
-template = """
-interface {{ interface }}
- ip address {{ ip }}/{{ mask }}
- description {{ description }}
- ip vrf {{ vrf }}
-"""
-
-parser = ttp(data, template)
-parser.parse()
-pprint.pprint(parser.result(), width=100)
-
-# prints:
-# [[[{'description': 'Router-id-loopback',
-#     'interface': 'Loopback0',
-#     'ip': '192.168.0.113',
-#     'mask': '24'},
-#    {'description': 'CPE_Acces_Vlan',
-#     'interface': 'Vlan778',
-#     'ip': '2002::fd37',
-#     'mask': '124',
-#     'vrf': 'CPE1'}]]]
+# Windows
+start-dev.bat
 ```
-</details>
 
-## Example - a bit more complicated
+脚本会自动检测端口占用（8000 / 5173），确认后端就绪再启动前端。
 
-For this example lets say we want to parse BGP peerings output, but combine state with configuration data, at the end we want to get pretty looking text table printed to screen.
+### 手动启动
 
-<details><summary>Code</summary>
+**安装核心依赖**
 
-```python
-template="""
-<doc>
-This template first parses "show bgp vrf CUST-1 vpnv4 unicast summary" commands
-output, forming results for "bgp_state" dictionary, where peer ip is a key.
-
-Following that, "show run | section bgp" output parsed by group "bgp_cfg". That
-group uses nested groups to form results structure, including absolute path
-"/bgp_peers*" with path formatter to produce a list of peers under "bgp_peers"
-path.
-
-For each peer "hostname" and local bgp "local_asn" added using previous matches.
-Additionally, group lookup function used to lookup peer state from "bgp_state"
-group results, adding found data to peer results.
-
-Finally, "bgp_peers" section of results passed via "tabulate_outputter" to
-from and print this table to terminal:
-
-hostname           local_asn    vrf_name    peer_ip    peer_asn    uptime    state    description    afi    rpl_in           rpl_out
------------------  -----------  ----------  ---------  ----------  --------  -------  -------------  -----  ---------------  ---------------
-ucs-core-switch-1  65100        CUST-1      192.0.2.1  65101       00:12:33  300      peer-1         ipv4   RPL-1-IMPORT-v4  RPL-1-EXPORT-V4
-ucs-core-switch-1  65100        CUST-1      192.0.2.2  65102       03:55:01  idle     peer-2         ipv4   RPL-2-IMPORT-V6  RPL-2-EXPORT-V6
-
-Run this script with "python filename.py"
-</doc>
-
-<vars>
-hostname="gethostname"
-chain_1 = [
-    "set('vrf_name')",
-    "lookup('peer_ip', group='bgp_state', update=True)"
-]
-</vars>
-
-<group name="bgp_state.{{ peer }}" input="bgp_state">
-{{ peer }}  4 65101      20      21       43    0    0 {{ uptime }} {{ state }}
-</group>
-
-<group name="bgp_cfg" input="bgp_config">
-router bgp {{ asn | record(asn) }}
-  <group name="vrfs.{{ vrf_name }}" record="vrf_name">
-  vrf {{ vrf_name }}
-    <group name="/bgp_peers*" chain="chain_1">
-    neighbor {{ peer_ip }}
-      {{ local_asn | set(asn) }}
-      {{ hostname | set(hostname) }}
-      remote-as {{ peer_asn }}
-      description {{ description }}
-      address-family {{ afi }} unicast
-        route-map {{ rpl_in }} in
-        route-map {{ rpl_out }} out
-	</group>
-  </group>
-</group>
-
-<output
-name="tabulate_outputter"
-format="tabulate"
-path="bgp_peers"
-returner="terminal"
-headers="hostname, local_asn, vrf_name, peer_ip, peer_asn, uptime, state, description, afi, rpl_in, rpl_out"
-/>
-"""
-
-data_bgp_state = """
-ucs-core-switch-1#show bgp vrf CUST-1 vpnv4 unicast summary
-Neighbor   V    AS MsgRcvd MsgSent   TblVer  InQ OutQ Up/Down  State/PfxRcd
-192.0.2.1  4 65101      32      54       42    0    0 00:12:33       300
-192.0.2.2  4 65101      11      45       99    0    0 03:55:01       idle
-"""
-
-data_bgp_config = """
-ucs-core-switch-1#show run | section bgp
-router bgp 65100
-  vrf CUST-1
-    neighbor 192.0.2.1
-      remote-as 65101
-      description peer-1
-      address-family ipv4 unicast
-        route-map RPL-1-IMPORT-v4 in
-        route-map RPL-1-EXPORT-V4 out
-    neighbor 192.0.2.2
-      remote-as 65102
-      description peer-2
-      address-family ipv4 unicast
-        route-map RPL-2-IMPORT-V6 in
-        route-map RPL-2-EXPORT-V6 out
-"""
-
-from ttp import ttp
-
-parser = ttp()
-parser.add_template(template)
-parser.add_input(data=data_bgp_state, input_name="bgp_state")
-parser.add_input(data=data_bgp_config, input_name="bgp_config")
-parser.parse()
+```bash
+poetry install
 ```
-</details>
 
-# Contributions
+**启动后端**
 
-Feel free to submit an issue, report a bug or ask a question, feature requests are welcomed.
+```bash
+cd backend && pip install -r requirements.txt
+cd backend && python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
 
-# Community Contributions
+**启动前端**
 
-List of community resources:
+```bash
+cd frontend && npm install
+cd frontend && npm run dev -- --host 127.0.0.1 --port 5173
+```
 
-- [Sandbox to test TTP templates](http://textfsm.nornir.tech/) by [tbotnz](https://github.com/tbotnz)
-- [TTP Video Tutorials](https://pynet.twb-tech.com/videos/ttp/ttp.html) by [Kirk Byers](https://github.com/ktbyers)
-- [TTP Standalone editor](https://github.com/roc-ops/TTP-Editor) by [roc-ops](https://github.com/roc-ops), [Online Sandbox to test it](https://roc-ops.github.io/TTP-Editor/)
+启动后访问 [http://127.0.0.1:5173](http://127.0.0.1:5173)。
+
+## 运行测试
+
+```bash
+# 运行全部测试（必须在 test/pytest 目录下执行）
+cd test/pytest && poetry run pytest -vv
+
+# 运行 Web UI 相关测试
+cd test/pytest && poetry run pytest test_web_ui_template_service.py -vv
+cd test/pytest && poetry run pytest test_web_ui_csv_output.py -vv
+cd test/pytest && poetry run pytest test_web_ui_parse_api.py -vv
+cd test/pytest && poetry run pytest test_web_ui_generation_api.py -vv
+```
+
+## 架构概览
+
+```
+ip_ttp/
+├── ttp/              # TTP 核心解析引擎（来自 dmulyalin/ttp）
+├── backend/          # FastAPI 后端
+│   └── app/
+│       ├── routers/  # parse / templates / generation 路由
+│       └── services/ # TTP 集成、SQLite 持久化、配置生成
+├── frontend/         # React + Vite 前端
+│   └── src/
+│       ├── components/  # TemplateBuilder / TestResults / ConfigGeneration
+│       ├── store/       # Zustand 全局状态
+│       └── services/    # Axios API 封装
+└── test/pytest/      # 核心库 + Web UI 后端测试
+```
+
+## API 端点
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/parse` | 用模板解析文本 |
+| `POST` | `/api/parse/file` | 解析上传的文件 |
+| `GET` | `/api/patterns` | 获取内置模式目录 |
+| `GET/POST/PUT/DELETE` | `/api/templates` | 保存的模板 CRUD |
+| `GET/POST/PUT/DELETE` | `/api/generation/templates` | 配置生成模板 CRUD |
+| `POST` | `/api/generation/render` | 批量渲染配置 |
+
+## 关于 TTP
+
+TTP (Template Text Parser) 是一个使用模板进行半结构化文本解析的 Python 库。其核心能力包括：
+
+- 从模板动态生成正则表达式进行文本匹配
+- 使用丰富的内置函数对匹配结果进行实时处理
+- 将结果组合成任意层次结构
+- 支持多种输出格式（JSON、CSV、tabulate 等）
+
+完整文档请参阅 [ttp.readthedocs.io](https://ttp.readthedocs.io)。
+
+## 贡献
+
+欢迎提交 Issue、报告 Bug 或提出功能需求。
