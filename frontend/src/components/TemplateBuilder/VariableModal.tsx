@@ -102,6 +102,8 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
   const [ignoreValue, setIgnoreValue] = useState('')
   const [headersColumns, setHeadersColumns] = useState('')
   const [isIndicatorMenuOpen, setIsIndicatorMenuOpen] = useState(false)
+  const [isSyntaxModeOpen, setIsSyntaxModeOpen] = useState(false)
+  const [isPatternOpen, setIsPatternOpen] = useState(false)
 
   useEffect(() => {
     const isEditMode = mode === 'edit'
@@ -117,12 +119,15 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
         : ''
     )
     setIsIndicatorMenuOpen(false)
+    setIsSyntaxModeOpen(false)
+    setIsPatternOpen(false)
   }, [mode, selectedText, initialVariable])
 
   useEffect(() => {
     if (syntaxMode !== 'variable') {
       setIsIndicatorMenuOpen(false)
     }
+    setIsSyntaxModeOpen(false)
   }, [syntaxMode])
 
   const toggleIndicator = (value: string) => {
@@ -195,115 +200,163 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
   const isEditMode = mode === 'edit'
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
+    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}>
       <div className="rounded-lg p-6 w-[560px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
           {isEditMode ? 'Edit Variable' : 'Add Variable'}
         </h3>
 
         <form onSubmit={handleSubmit}>
-          <div className="mb-4 p-3 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-            <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Selected Text</label>
+          <div className="mb-3 px-3 py-2 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+            <label className="block text-xs mb-0.5" style={{ color: 'var(--text-muted)' }}>Selected Text</label>
             <code className="text-sm" style={{ color: '#22c55e' }}>{selectedText}</code>
           </div>
 
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Syntax Mode</label>
-            <select
-              value={syntaxMode}
-              onChange={(e) => setSyntaxMode(e.target.value as VariableSyntaxMode)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-            >
-              {SYNTAX_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-            <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+          <div className="mb-3">
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Syntax Mode</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => { setIsSyntaxModeOpen((o) => !o); setIsPatternOpen(false); setIsIndicatorMenuOpen(false) }}
+                className="w-full px-3 py-1.5 text-sm border rounded-md text-left flex items-center justify-between focus:outline-none focus:ring-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              >
+                <span>{SYNTAX_MODE_OPTIONS.find((o) => o.value === syntaxMode)?.label}</span>
+                <svg className={`w-3.5 h-3.5 transition-transform ${isSyntaxModeOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-muted)' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {isSyntaxModeOpen && (
+                <div
+                  className="absolute z-20 top-full mt-1 w-full rounded-md border shadow-lg p-1 space-y-0.5"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}
+                >
+                  {SYNTAX_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => { setSyntaxMode(option.value as VariableSyntaxMode); setIsSyntaxModeOpen(false) }}
+                      className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-500/10"
+                      style={{ color: syntaxMode === option.value ? '#3b82f6' : 'var(--text-primary)' }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
               {SYNTAX_MODE_OPTIONS.find((option) => option.value === syntaxMode)?.description}
             </p>
           </div>
 
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Variable Name</label>
+          <div className="mb-3">
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Variable Name</label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="e.g., ip_address, interface_name"
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+              className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-1"
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               autoFocus
               disabled={!isVariableMode}
             />
           </div>
 
-          <div className="mb-4">
-            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Pattern</label>
-            <select
-              value={pattern}
-              onChange={(e) => setPattern(e.target.value)}
-              className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
-              style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
-              disabled={!isVariableMode}
-            >
-              <option value="">None (default)</option>
-              {Object.entries(patterns).map(([key, value]) => (
-                <option key={key} value={key}>
-                  {key} - {value.description}
-                </option>
-              ))}
-            </select>
+          <div className="mb-3">
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Pattern</label>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => { if (isVariableMode) { setIsPatternOpen((o) => !o); setIsSyntaxModeOpen(false); setIsIndicatorMenuOpen(false) } }}
+                disabled={!isVariableMode}
+                className="w-full px-3 py-1.5 text-sm border rounded-md text-left flex items-center justify-between focus:outline-none focus:ring-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: isVariableMode ? 'var(--text-primary)' : 'var(--text-muted)', opacity: isVariableMode ? 1 : 0.7 }}
+              >
+                <span>{pattern ? `${pattern} - ${patterns[pattern]?.description}` : 'None (default)'}</span>
+                <svg className={`w-3.5 h-3.5 transition-transform shrink-0 ${isPatternOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-muted)' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </button>
+              {isPatternOpen && isVariableMode && (
+                <div
+                  className="absolute z-20 top-full mt-1 w-full rounded-md border shadow-lg p-1 space-y-0.5 max-h-48 overflow-y-auto"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => { setPattern(''); setIsPatternOpen(false) }}
+                    className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-500/10"
+                    style={{ color: pattern === '' ? '#3b82f6' : 'var(--text-primary)' }}
+                  >
+                    None (default)
+                  </button>
+                  {Object.entries(patterns).map(([key, value]) => (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => { setPattern(key); setIsPatternOpen(false) }}
+                      className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-500/10"
+                      style={{ color: pattern === key ? '#3b82f6' : 'var(--text-primary)' }}
+                    >
+                      <span className="font-mono">{key}</span>
+                      <span style={{ color: 'var(--text-muted)' }}> — {value.description}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
             {pattern && patterns[pattern] && isVariableMode && (
-              <p className="mt-2 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
+              <p className="mt-1 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                 Regex: {patterns[pattern].regex}
               </p>
             )}
           </div>
 
           {isIgnoreMode && (
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Ignore Value (optional)</label>
+            <div className="mb-3">
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Ignore Value (optional)</label>
               <input
                 type="text"
                 value={ignoreValue}
                 onChange={(e) => setIgnoreValue(e.target.value)}
                 placeholder="e.g., IP or pattern_var"
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-1"
                 style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               />
-              <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                 When set, the generated syntax will be <code>{'{{ ignore("value") }}'}</code>.
               </p>
             </div>
           )}
 
           {isHeadersMode && (
-            <div className="mb-4">
-              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>columns(n) (optional)</label>
+            <div className="mb-3">
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>columns(n) (optional)</label>
               <input
                 type="number"
                 min="1"
                 value={headersColumns}
                 onChange={(e) => setHeadersColumns(e.target.value)}
                 placeholder="e.g., 5"
-                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                className="w-full px-3 py-1.5 text-sm border rounded-md focus:outline-none focus:ring-1"
                 style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               />
-              <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                 When set, the generated syntax will append | columns(n) after _headers_.
               </p>
             </div>
           )}
 
-          <div className="mb-6">
-            <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>Indicators</label>
+          <div className="mb-4">
+            <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Indicators</label>
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setIsIndicatorMenuOpen((open) => !open)}
+                onClick={() => { setIsIndicatorMenuOpen((open) => !open); setIsSyntaxModeOpen(false); setIsPatternOpen(false) }}
                 disabled={!isVariableMode}
-                className="w-full px-3 py-2 border rounded-md text-left flex items-center justify-between"
+                className="w-full px-3 py-1.5 text-sm border rounded-md text-left flex items-center justify-between focus:outline-none focus:ring-1"
                 style={{
                   backgroundColor: 'var(--bg-tertiary)',
                   borderColor: 'var(--border-color)',
@@ -314,22 +367,22 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
                 <span>
                   {selectedIndicatorLabels.length > 0 ? selectedIndicatorLabels.join(', ') : 'Select indicators...'}
                 </span>
-                <svg className={`w-4 h-4 transition-transform ${isIndicatorMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className={`w-3.5 h-3.5 transition-transform ${isIndicatorMenuOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
 
               {isIndicatorMenuOpen && isVariableMode && (
                 <div
-                  className="absolute z-10 mt-2 w-full rounded-md border shadow-lg p-2 space-y-2"
-                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                  className="absolute z-20 top-full mt-1 w-full rounded-md border shadow-lg p-1 space-y-0.5"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)' }}
                 >
                   {AVAILABLE_INDICATORS.map((indicator) => {
                     const checked = indicators.includes(indicator.value)
                     return (
                       <label
                         key={indicator.value}
-                        className="flex items-start gap-3 p-2 rounded-md cursor-pointer"
+                        className="flex items-center gap-2 px-2 py-1 rounded cursor-pointer"
                         style={{
                           backgroundColor: checked ? 'rgba(59, 130, 246, 0.12)' : 'transparent',
                           color: 'var(--text-primary)'
@@ -339,12 +392,10 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
                           type="checkbox"
                           checked={checked}
                           onChange={() => toggleIndicator(indicator.value)}
-                          className="mt-1 h-4 w-4 accent-blue-500"
+                          className="h-3.5 w-3.5 accent-blue-500 shrink-0"
                         />
-                        <div>
-                          <div className="text-sm font-mono">{indicator.label}</div>
-                          <div className="text-xs" style={{ color: 'var(--text-muted)' }}>{indicator.description}</div>
-                        </div>
+                        <span className="text-xs font-mono">{indicator.label}</span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>— {indicator.description}</span>
                       </label>
                     )
                   })}
@@ -352,14 +403,14 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
               )}
             </div>
             {!isVariableMode && (
-              <p className="mt-2 text-xs" style={{ color: 'var(--text-muted)' }}>
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                 Indicators are only used for standard variable mode.
               </p>
             )}
           </div>
 
-          <div className="mb-6 p-3 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-            <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Template Syntax</label>
+          <div className="mb-4 px-3 py-2 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
+            <label className="block text-xs mb-0.5" style={{ color: 'var(--text-muted)' }}>Template Syntax</label>
             <code className="text-sm" style={{ color: '#3b82f6' }}>
               {templateSyntax}
             </code>

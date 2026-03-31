@@ -643,7 +643,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
         </div>
       )}
       {moveTarget && (
-        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
+        <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) setMoveTarget(null) }}>
           <div className="rounded-lg p-6 w-[420px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Move Template</h3>
             <div className="text-sm mb-4" style={{ color: 'var(--text-secondary)' }}>
