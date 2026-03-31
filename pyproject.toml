@@ -58,6 +58,10 @@ pyenchant = { version = "*", markers = "python_version >= '3.9'" }
 pylint = { version = "*", markers = "python_version >= '3.9'" }
 pytest = { version = ">=7.1", markers = "python_version >= '3.9'" }
 
+
+[tool.poetry.group.test.dependencies]
+httpx = "^0.28.1"
+
 [build-system]
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
