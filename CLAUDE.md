@@ -144,6 +144,12 @@ Template execution flow is:
   - `POST /api/parse` — parse raw text with a template; optional `name` wraps the template in `<group name="...">`
   - `POST /api/parse/file` — parse uploaded file content
   - `GET /api/patterns` — built-in pattern catalog used by the frontend
+  - `POST /api/parse/batch/jobs` — submit a background batch parse job (multiple files × multiple templates)
+  - `GET /api/parse/batch/jobs/{job_id}` — poll job status
+  - `POST /api/parse/batch/jobs/{job_id}/cancel` — cancel a running job
+  - `GET /api/parse/batch/jobs/{job_id}/results` — paginated result rows
+  - `GET /api/parse/batch/jobs/{job_id}/artifacts/{artifact_name}` — download result artifacts (ZIP, XLSX)
+- `app/services/parse_batch_service.py` runs batch jobs in a background thread pool with a `ProcessPoolExecutor` for CPU-bound parsing; job state is held in-process (not persisted to SQLite). Env vars `TTP_BATCH_MAX_WORKERS` and `TTP_BATCH_MAX_JOBS` control concurrency.
 - `app/routers/templates.py` exposes saved-template CRUD under `/api/templates`:
   - `GET /api/templates`
   - `POST /api/templates`
@@ -171,6 +177,12 @@ Template execution flow is:
   - `ConfigGenerationService` validates uploaded JSON by required template aliases and renders generation templates from namespaced payloads
   - bindings are persisted as editor coordinates plus original text and are applied back onto the saved generation template text before render
   - Jinja2 sandbox rendering is used when available; otherwise a limited `{{ data.path }}` placeholder renderer is used
+- `app/routers/template_library.py` exposes shared vendor/category management under `/api/template-library`:
+  - `GET/POST /api/template-library/vendors` — list or create vendors (shared across parse and generation templates)
+  - `PUT/DELETE /api/template-library/vendors/{vendor_name}` — rename or delete a vendor
+  - `GET/POST /api/template-library/{template_kind}/categories` — list or create categories for `parse` or `generation` kind
+  - `PUT/DELETE /api/template-library/{template_kind}/categories/{category_id}` — update or delete a category
+- `app/services/template_directory_service.py` manages the `vendors`, `template_categories`, and `generation_categories` tables in the same SQLite database. `DEFAULT_VENDOR` is `"Unassigned"`. Templates and generation templates each carry `vendor` and `category_path` fields referencing this directory.
 - The backend has no general application database beyond the SQLite file used for saved Web UI templates.
 
 ### 4) React frontend (`frontend/src`)
@@ -179,8 +191,9 @@ Template execution flow is:
   - **Template Builder**
   - **Test & Results**
   - **Config Generation**
-- On startup, `App.tsx` fetches `/api/patterns`, `/api/templates`, and `/api/generation/templates`, and shows backend connection status in the header.
+- On startup, `App.tsx` fetches `/api/patterns`, `/api/templates`, `/api/generation/templates`, and `/api/template-library/vendors` plus both category lists, and shows backend connection status in the header.
 - Global app state lives in `store/useStore.ts` using Zustand with `persist` storage key `ttp-web-storage`.
+- `components/TemplateDirectoryTree.tsx` renders the vendor/category sidebar used in both the Template Builder and Config Generation tabs. It drives the Move Template modal and communicates with `/api/template-library` to create, rename, and delete vendors and categories.
 
 #### Template Builder flow
 
@@ -253,7 +266,7 @@ Template execution flow is:
 - **Template Builder coordinate sync matters**: variable/group coordinates are still the persisted contract for saved templates and `generateTemplate()`, but `TemplateBuilder.tsx` relies on Monaco tracking decorations to keep those coordinates aligned while users edit sample text. If you change annotation behavior, preserve that sync path instead of making generation depend directly on live Monaco selection state.
 - **Config generation bindings are also coordinate-based**: `generationBindings` persist text ranges and original text from the editor. Backend rendering validates and reapplies those ranges before templating, so changes to frontend binding capture must stay aligned with `ConfigGenerationService._selection_to_offsets()` and `_apply_bindings()`.
 - **Frontend lint is not currently wired up completely**: the `npm run lint` script exists, but there is no checked-in ESLint config in the repository, so lint currently fails for configuration reasons rather than app code errors.
-- **Frontend test wiring is incomplete**: `frontend/vite.config.ts` contains Vitest config, but there is no `test` script in `frontend/package.json`, no checked-in frontend test files, and `setupFiles` points at `frontend/src/test/setup.ts`, which is currently absent.
+- **Frontend tests exist but wiring is partial**: `frontend/src/components/TestResults/TestResults.test.tsx` uses Vitest + Testing Library. There is still no `test` script in `frontend/package.json` and `setupFiles` in `vite.config.ts` points at `frontend/src/test/setup.ts`, which is absent — run tests via `cd frontend && npx vitest` directly for now.
 - **When adding new TTP functions**:
   - place the module in the correct `ttp/<scope>/` directory
   - define `_name_map_` if the template-facing name differs from the Python function name

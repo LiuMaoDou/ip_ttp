@@ -2,8 +2,8 @@
 name = "ttp"
 version = "0.10.0"
 description = "Template Text Parser"
-authors = ["Denis Mulyalin <d.mulyalin@gmail.com>"]
-maintainers = ["Denis Mulyalin <d.mulyalin@gmail.com>"]
+authors = ["Denis Mulyalin <d.mulyalin@gmail.com>", "RunningMaoDou"]
+maintainers = ["Denis Mulyalin <d.mulyalin@gmail.com>", "RunningMaoDou"]
 license = "MIT"
 readme = "README.md"
 homepage = "https://github.com/dmulyalin/ttp"

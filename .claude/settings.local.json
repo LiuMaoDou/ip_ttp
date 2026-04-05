@@ -60,7 +60,9 @@
       "Bash(pip3 show:*)",
       "Bash(sqlite3:*)",
       "Bash(python3 -c \"from backend.app.services.generation_service import ConfigGenerationService; print\\(''OK''\\)\")",
-      "Bash(find /Users/liujiannan/2026/ip_ttp/test -name *batch* -type f)"
+      "Bash(find /Users/liujiannan/2026/ip_ttp/test -name *batch* -type f)",
+      "Bash(gh api:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }
