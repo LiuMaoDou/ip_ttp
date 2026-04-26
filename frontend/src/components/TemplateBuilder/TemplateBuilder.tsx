@@ -2,7 +2,7 @@ import { useRef, useState, useCallback, useEffect, type ChangeEvent } from 'reac
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor, IRange, IDisposable } from 'monaco-editor'
 import { saveAs } from 'file-saver'
-import { useStore, getVariableColor, type Variable, type VariableSyntaxMode } from '../../store/useStore'
+import { useStore, getVariableColor, type Group, type TemplateSaveSource, type Variable, type VariableSyntaxMode } from '../../store/useStore'
 import { getParameterPlaceholderDecorations, sanitizeFileNameSegment } from '../../utils'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import VariableModal from './VariableModal'
@@ -148,6 +148,177 @@ function getTemplateDownloadName(templateName?: string): string {
   return normalizedName ? `${normalizedName}.ttp` : 'template-builder-template.ttp'
 }
 
+function createGeneratedTemplateVariableId(name: string, index: number) {
+  const normalizedName = name.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'variable'
+  return `generated-${normalizedName}-${index}`
+}
+
+function createGeneratedTemplateGroupId(name: string, index: number) {
+  const normalizedName = name.replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/^-+|-+$/g, '') || 'group'
+  return `generated-group-${normalizedName}-${index}`
+}
+
+function getLineColumnFromOffset(text: string, offset: number): { line: number; column: number } {
+  const prefix = text.slice(0, offset)
+  const lines = prefix.split('\n')
+  return {
+    line: lines.length,
+    column: lines[lines.length - 1].length + 1
+  }
+}
+
+function splitTopLevelFilters(expression: string): string[] {
+  const filters: string[] = []
+  let current = ''
+  let quote: string | null = null
+  let escaped = false
+  let depth = 0
+
+  for (const char of expression) {
+    if (escaped) {
+      current += char
+      escaped = false
+      continue
+    }
+
+    if (char === '\\') {
+      current += char
+      escaped = true
+      continue
+    }
+
+    if (quote) {
+      current += char
+      if (char === quote) {
+        quote = null
+      }
+      continue
+    }
+
+    if (char === '"' || char === "'") {
+      current += char
+      quote = char
+      continue
+    }
+
+    if (char === '(' || char === '[' || char === '{') {
+      current += char
+      depth += 1
+      continue
+    }
+
+    if (char === ')' || char === ']' || char === '}') {
+      current += char
+      depth = Math.max(0, depth - 1)
+      continue
+    }
+
+    if (char === '|' && depth === 0) {
+      filters.push(current.trim())
+      current = ''
+      continue
+    }
+
+    current += char
+  }
+
+  filters.push(current.trim())
+  return filters.filter(Boolean)
+}
+
+function extractTemplateMetadataFromGeneratedTemplate(template: string): { variables: Variable[]; groups: Group[] } {
+  const variableMatches = template.matchAll(/\{\{\s*([\s\S]*?)\s*\}\}/g)
+  const variables: Variable[] = []
+  const groups: Group[] = []
+  const groupStack: Array<{ name: string; startLine: number }> = []
+  const seenNames = new Set<string>()
+  const ignoredNames = new Set(['ignore', '_end_', '_headers_', '_start_', '_line_'])
+  const lineCount = template.split('\n').length
+
+  for (const match of template.matchAll(/<group\b[^>]*\bname\s*=\s*["']([^"']+)["'][^>]*>|<\/group>/gi)) {
+    const fullMatch = match[0] || ''
+    const position = getLineColumnFromOffset(template, match.index || 0)
+
+    if (fullMatch.toLowerCase().startsWith('</group')) {
+      const startedGroup = groupStack.pop()
+      if (!startedGroup) {
+        continue
+      }
+
+      const index = groups.length
+      groups.push({
+        id: createGeneratedTemplateGroupId(startedGroup.name, index),
+        name: startedGroup.name,
+        startLine: startedGroup.startLine,
+        endLine: position.line,
+        colorIndex: index % VARIABLE_COLORS.length
+      })
+      continue
+    }
+
+    const groupName = match[1]?.trim()
+    if (groupName) {
+      groupStack.push({
+        name: groupName,
+        startLine: position.line
+      })
+    }
+  }
+
+  while (groupStack.length > 0) {
+    const startedGroup = groupStack.pop()
+    if (!startedGroup) {
+      continue
+    }
+
+    const index = groups.length
+    groups.push({
+      id: createGeneratedTemplateGroupId(startedGroup.name, index),
+      name: startedGroup.name,
+      startLine: startedGroup.startLine,
+      endLine: lineCount,
+      colorIndex: index % VARIABLE_COLORS.length
+    })
+  }
+
+  for (const match of variableMatches) {
+    const expression = match[1]?.trim()
+    if (!expression) {
+      continue
+    }
+
+    const [nameCandidate, ...filters] = splitTopLevelFilters(expression)
+    const name = nameCandidate.trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || ignoredNames.has(name) || seenNames.has(name)) {
+      continue
+    }
+
+    const index = variables.length
+    const startPosition = getLineColumnFromOffset(template, match.index || 0)
+    seenNames.add(name)
+    variables.push({
+      id: createGeneratedTemplateVariableId(name, index),
+      name,
+      pattern: filters[0] || '',
+      indicators: filters.slice(1),
+      syntaxMode: 'variable',
+      startLine: startPosition.line,
+      startColumn: startPosition.column,
+      endLine: startPosition.line,
+      endColumn: startPosition.column + (match[0]?.length || 0),
+      originalText: name,
+      colorIndex: index % VARIABLE_COLORS.length
+    })
+  }
+
+  groups.sort((a, b) => {
+    if (a.startLine !== b.startLine) return a.startLine - b.startLine
+    return b.endLine - a.endLine
+  })
+
+  return { variables, groups }
+}
+
 export default function TemplateBuilder() {
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null)
   const monacoRef = useRef<typeof import('monaco-editor') | null>(null)
@@ -174,6 +345,7 @@ export default function TemplateBuilder() {
   const [newVendorInput, setNewVendorInput] = useState('')
   const [isNewCategory, setIsNewCategory] = useState(false)
   const [newCategoryInput, setNewCategoryInput] = useState('')
+  const [templateSaveSource, setTemplateSaveSource] = useState<TemplateSaveSource>('sample')
   const [isEditorReady, setIsEditorReady] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const pendingSyncFrameRef = useRef<number | null>(null)
@@ -209,6 +381,7 @@ export default function TemplateBuilder() {
   } = useStore()
 
   const selectedSavedTemplate = savedTemplates.find((savedTemplate) => savedTemplate.id === selectedSavedTemplateId)
+  const templateSaveSourceLabel = templateSaveSource === 'sample' ? 'Sample Input' : 'Generated Template'
 
   const rebuildTrackingDecorations = useCallback(() => {
     if (!editorRef.current || !monacoRef.current) {
@@ -436,6 +609,38 @@ export default function TemplateBuilder() {
       syncTrackedRangesToStore()
     })
   }, [syncTrackedRangesToStore])
+
+  const flushTrackedRangeSync = useCallback(() => {
+    if (pendingSyncFrameRef.current !== null) {
+      window.cancelAnimationFrame(pendingSyncFrameRef.current)
+      pendingSyncFrameRef.current = null
+    }
+
+    if (!suppressTrackingSyncRef.current) {
+      syncTrackedRangesToStore()
+    }
+  }, [syncTrackedRangesToStore])
+
+  const syncGeneratedTemplateVariables = useCallback(() => {
+    const metadata = extractTemplateMetadataFromGeneratedTemplate(useStore.getState().generatedTemplate)
+    useStore.setState({
+      variables: metadata.variables,
+      groups: metadata.groups
+    })
+    return metadata
+  }, [])
+
+  const prepareTemplateForSave = useCallback((source: TemplateSaveSource): TemplateSaveSource => {
+    if (source === 'sample') {
+      flushTrackedRangeSync()
+      useStore.getState().generateTemplate()
+      syncGeneratedTemplateVariables()
+      return 'generated'
+    }
+
+    syncGeneratedTemplateVariables()
+    return 'generated'
+  }, [flushTrackedRangeSync, syncGeneratedTemplateVariables])
 
   // Function to apply decorations
   const applyDecorations = useCallback(() => {
@@ -891,21 +1096,48 @@ export default function TemplateBuilder() {
     setGroupSelection(null)
   }, [groupSelection, addGroup])
 
-  const handleSaveTemplate = useCallback(() => {
-    if (variables.length === 0 && groups.length === 0) {
-      alert('Please add at least one variable or group')
+  const handleSaveTemplate = useCallback(async (source: TemplateSaveSource) => {
+    const hasSampleInput = sampleText.trim().length > 0
+    const hasGeneratedTemplate = generatedTemplate.trim().length > 0
+
+    if (source === 'sample' && !hasSampleInput) {
+      alert('Please enter Sample Input before saving')
       return
     }
 
-    setTemplateNameInput(templateName || selectedSavedTemplate?.name || '')
-    setTemplateVendorInput(selectedSavedTemplate?.vendor || currentTemplateVendor || 'Unassigned')
-    setTemplateCategoryInput((selectedSavedTemplate?.categoryPath || currentTemplateCategoryPath || []).join('/'))
+    if (source === 'generated' && !hasGeneratedTemplate) {
+      alert('Please enter Generated Template before saving')
+      return
+    }
+
+    const persistenceSource = prepareTemplateForSave(source)
+    setTemplateSaveSource(source)
+
+    if (selectedSavedTemplateId && selectedSavedTemplate) {
+      setIsSavingTemplate(true)
+      try {
+        await saveTemplate(
+          selectedSavedTemplate.name,
+          selectedSavedTemplate.description || '',
+          selectedSavedTemplate.vendor || currentTemplateVendor || 'Unassigned',
+          selectedSavedTemplate.categoryPath || currentTemplateCategoryPath || [],
+          persistenceSource
+        )
+      } finally {
+        setIsSavingTemplate(false)
+      }
+      return
+    }
+
+    setTemplateNameInput(templateName || '')
+    setTemplateVendorInput(currentTemplateVendor || 'Unassigned')
+    setTemplateCategoryInput((currentTemplateCategoryPath || []).join('/'))
     setIsNewVendor(false)
     setNewVendorInput('')
     setIsNewCategory(false)
     setNewCategoryInput('')
     setShowTemplateNameModal(true)
-  }, [variables, groups, templateName, selectedSavedTemplate, currentTemplateVendor, currentTemplateCategoryPath])
+  }, [sampleText, generatedTemplate, templateName, selectedSavedTemplateId, selectedSavedTemplate, currentTemplateVendor, currentTemplateCategoryPath, saveTemplate, prepareTemplateForSave])
 
   const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
@@ -913,9 +1145,10 @@ export default function TemplateBuilder() {
     const rawCategory = isNewCategory ? newCategoryInput : templateCategoryInput
     const categoryPath = rawCategory.split('/').map((segment) => segment.trim()).filter(Boolean)
     setTemplateName(name)
+    const persistenceSource = prepareTemplateForSave(templateSaveSource)
     setIsSavingTemplate(true)
     try {
-      await saveTemplate(name, '', finalVendor, categoryPath)
+      await saveTemplate(name, '', finalVendor, categoryPath, persistenceSource)
       setShowTemplateNameModal(false)
       setTemplateNameInput('')
       setTemplateVendorInput('Unassigned')
@@ -927,7 +1160,7 @@ export default function TemplateBuilder() {
     } finally {
       setIsSavingTemplate(false)
     }
-  }, [templateNameInput, templateVendorInput, templateCategoryInput, isNewVendor, newVendorInput, isNewCategory, newCategoryInput, setTemplateName, saveTemplate])
+  }, [templateNameInput, templateVendorInput, templateCategoryInput, isNewVendor, newVendorInput, isNewCategory, newCategoryInput, templateSaveSource, setTemplateName, saveTemplate, prepareTemplateForSave])
 
   const handleLoadTemplate = useCallback(async (id: string) => {
     suppressTrackingSyncRef.current = true
@@ -988,13 +1221,6 @@ export default function TemplateBuilder() {
             New
           </button>
           <button
-            onClick={handleSaveTemplate}
-            className="btn"
-            disabled={variables.length === 0 && groups.length === 0}
-          >
-            Save
-          </button>
-          <button
             onClick={handleDownloadTemplate}
             className="btn"
             disabled={!generatedTemplate.trim()}
@@ -1033,10 +1259,22 @@ export default function TemplateBuilder() {
         <div className="flex-1 flex min-w-0">
           {/* Sample Input Editor (Left) */}
           <div className="flex-1 relative border-r" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center gap-2" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
-              <span style={{ color: 'var(--text-secondary)' }}>Sample Input</span>
-              <span style={{ color: 'var(--text-muted)' }}>Right-click selection to</span>
-              <span style={{ color: 'var(--text-primary)' }}>Add Variable or Group</span>
+            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center justify-between gap-3" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
+              <div className="flex items-center gap-2 min-w-0">
+                <span style={{ color: 'var(--text-secondary)' }}>Sample Input</span>
+                <span style={{ color: 'var(--text-muted)' }}>Right-click selection to</span>
+                <span style={{ color: 'var(--text-primary)' }}>Add Variable or Group</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => { void handleSaveTemplate('sample') }}
+                disabled={isSavingTemplate || !sampleText.trim()}
+                className="btn px-2 py-1 text-xs"
+                style={{ fontSize: '12px', padding: '2px 8px' }}
+                title="Save Sample Input and regenerate Generated Template"
+              >
+                Save Sample
+              </button>
             </div>
             <div className="pt-9 h-full">
               <Editor
@@ -1071,36 +1309,38 @@ export default function TemplateBuilder() {
           {/* Generated Template Editor (Right) */}
           <div className="flex-1 relative" style={{ minWidth: '200px' }}>
             <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center justify-between" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
-              <span>Generated Template</span>
-              {templateName && <span style={{ color: 'var(--accent-primary)' }}>{templateName}</span>}
+              <div className="flex items-center gap-2 min-w-0">
+                <span>Generated Template</span>
+                {templateName && <span className="truncate" style={{ color: 'var(--accent-primary)' }}>{templateName}</span>}
+              </div>
+              <button
+                type="button"
+                onClick={() => { void handleSaveTemplate('generated') }}
+                disabled={isSavingTemplate || !generatedTemplate.trim()}
+                className="btn px-2 py-1 text-xs"
+                style={{ fontSize: '12px', padding: '2px 8px' }}
+                title="Save Generated Template exactly as shown"
+              >
+                Save Template
+              </button>
             </div>
             <div className="pt-9 h-full">
-              {generatedTemplate ? (
-                <Editor
-                  key={generatedTemplate}
-                  height="100%"
-                  defaultLanguage="xml"
-                  defaultValue={generatedTemplate}
-                  onMount={handleGeneratedEditorMount}
-                  options={{
-                    minimap: { enabled: false },
-                    lineNumbers: 'on',
-                    wordWrap: 'on',
-                    fontSize: 14,
-                    fontFamily: 'var(--font-mono)',
-                    scrollBeyondLastLine: false,
-                    readOnly: true,
-                    automaticLayout: true
-                  }}
-                />
-              ) : (
-                <div className="h-full flex items-center justify-center" style={{ color: 'var(--text-muted)' }}>
-                  <div className="text-center">
-                    <p className="text-sm">Add variables/groups</p>
-                    <p className="text-sm">and click Save</p>
-                  </div>
-                </div>
-              )}
+              <Editor
+                height="100%"
+                defaultLanguage="xml"
+                value={generatedTemplate}
+                onMount={handleGeneratedEditorMount}
+                onChange={(value) => useStore.setState({ generatedTemplate: value ?? '' })}
+                options={{
+                  minimap: { enabled: false },
+                  lineNumbers: 'on',
+                  wordWrap: 'on',
+                  fontSize: 14,
+                  fontFamily: 'var(--font-mono)',
+                  scrollBeyondLastLine: false,
+                  automaticLayout: true
+                }}
+              />
             </div>
           </div>
         </div>
@@ -1148,7 +1388,12 @@ export default function TemplateBuilder() {
       {showTemplateNameModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) setShowTemplateNameModal(false) }}>
           <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-            <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
+            <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Save {templateSaveSourceLabel}</h3>
+            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+              {templateSaveSource === 'sample'
+                ? 'Sample Input has priority and will regenerate the stored template.'
+                : 'Generated Template has priority and will be stored exactly as shown.'}
+            </p>
             <div className="mb-3">
               <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Name</div>
               <input

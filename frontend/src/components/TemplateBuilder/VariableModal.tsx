@@ -72,6 +72,13 @@ function getDefaultVariableName(selectedText: string) {
   return defaultName || 'variable'
 }
 
+const CUSTOM_REGEX_SENTINEL = '__custom_regex__'
+
+function extractCustomRegex(pattern: string): string | null {
+  const match = pattern.match(/^re\("(.*)"\)$/s)
+  return match ? match[1] : null
+}
+
 function getDefaultPattern(selectedText: string) {
   const trimmedText = selectedText.trim()
 
@@ -97,6 +104,8 @@ function getDefaultPattern(selectedText: string) {
 export default function VariableModal({ mode, selectedText, patterns, initialVariable, onConfirm, onCancel }: VariableModalProps) {
   const [name, setName] = useState('')
   const [pattern, setPattern] = useState('')
+  const [customRegex, setCustomRegex] = useState('')
+  const [extraFilters, setExtraFilters] = useState('')
   const [indicators, setIndicators] = useState<string[]>([])
   const [syntaxMode, setSyntaxMode] = useState<VariableSyntaxMode>('variable')
   const [ignoreValue, setIgnoreValue] = useState('')
@@ -107,9 +116,18 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
 
   useEffect(() => {
     const isEditMode = mode === 'edit'
+    const initialPattern = isEditMode ? (initialVariable?.pattern || '') : getDefaultPattern(selectedText)
+    const extractedRegex = extractCustomRegex(initialPattern)
 
     setName(isEditMode ? (initialVariable?.name || 'variable') : getDefaultVariableName(selectedText))
-    setPattern(isEditMode ? (initialVariable?.pattern || '') : getDefaultPattern(selectedText))
+    if (extractedRegex !== null) {
+      setPattern(CUSTOM_REGEX_SENTINEL)
+      setCustomRegex(extractedRegex)
+    } else {
+      setPattern(initialPattern)
+      setCustomRegex('')
+    }
+    setExtraFilters('')
     setIndicators(isEditMode ? (initialVariable?.indicators || []) : [])
     setSyntaxMode(isEditMode ? (initialVariable?.syntaxMode || 'variable') : 'variable')
     setIgnoreValue(isEditMode ? (initialVariable?.ignoreValue || '') : '')
@@ -138,6 +156,20 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
     ))
   }
 
+  const effectivePattern = useMemo(() => {
+    if (pattern !== CUSTOM_REGEX_SENTINEL) {
+      return pattern
+    }
+
+    const trimmed = customRegex.trim()
+    return trimmed ? `re("${trimmed}")` : ''
+  }, [pattern, customRegex])
+
+  const extraFilterTokens = useMemo(
+    () => extraFilters.split('|').map((token) => token.trim()).filter(Boolean),
+    [extraFilters]
+  )
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim() && syntaxMode === 'variable') {
@@ -145,7 +177,9 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
     }
 
     const parsedColumns = headersColumns.trim() ? Number(headersColumns.trim()) : null
-    const normalizedIndicators = syntaxMode === 'variable' ? indicators : []
+    const mergedIndicators = syntaxMode === 'variable'
+      ? [...indicators, ...extraFilterTokens]
+      : []
     const normalizedIgnoreValue = syntaxMode === 'ignore' ? (ignoreValue.trim() || undefined) : undefined
     const normalizedHeadersColumns = syntaxMode === 'headers'
       && parsedColumns !== null
@@ -156,8 +190,8 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
 
     onConfirm(
       name.trim() || 'variable',
-      pattern,
-      normalizedIndicators,
+      effectivePattern,
+      mergedIndicators,
       syntaxMode,
       {
         ignoreValue: normalizedIgnoreValue,
@@ -188,11 +222,11 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
       return `${selectedText} {{ _end_ }}`
     }
 
-    const filters = [pattern, ...indicators].filter(Boolean)
+    const filters = [effectivePattern, ...indicators, ...extraFilterTokens].filter(Boolean)
     return filters.length > 0
       ? `{{ ${name} | ${filters.join(' | ')} }}`
       : `{{ ${name} }}`
-  }, [headersColumns, ignoreValue, indicators, name, pattern, selectedText, syntaxMode])
+  }, [effectivePattern, extraFilterTokens, headersColumns, ignoreValue, indicators, name, selectedText, syntaxMode])
 
   const isVariableMode = syntaxMode === 'variable'
   const isIgnoreMode = syntaxMode === 'ignore'
@@ -200,7 +234,7 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
   const isEditMode = mode === 'edit'
 
   return (
-    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) onCancel() }}>
+    <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
       <div className="rounded-lg p-6 w-[560px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
           {isEditMode ? 'Edit Variable' : 'Add Variable'}
@@ -274,7 +308,13 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
                 className="w-full px-3 py-1.5 text-sm border rounded-md text-left flex items-center justify-between focus:outline-none focus:ring-1"
                 style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: isVariableMode ? 'var(--text-primary)' : 'var(--text-muted)', opacity: isVariableMode ? 1 : 0.7 }}
               >
-                <span>{pattern ? `${pattern} - ${patterns[pattern]?.description}` : 'None (default)'}</span>
+                <span>
+                  {pattern === CUSTOM_REGEX_SENTINEL
+                    ? 'Custom Regex (re("..."))'
+                    : pattern
+                      ? `${pattern} - ${patterns[pattern]?.description}`
+                      : 'None (default)'}
+                </span>
                 <svg className={`w-3.5 h-3.5 transition-transform shrink-0 ${isPatternOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-muted)' }}>
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
@@ -292,6 +332,15 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
                   >
                     None (default)
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => { setPattern(CUSTOM_REGEX_SENTINEL); setIsPatternOpen(false) }}
+                    className="w-full text-left px-2 py-1 rounded text-xs hover:bg-blue-500/10"
+                    style={{ color: pattern === CUSTOM_REGEX_SENTINEL ? '#3b82f6' : 'var(--text-primary)' }}
+                  >
+                    <span className="font-mono">Custom Regex</span>
+                    <span style={{ color: 'var(--text-muted)' }}> — wraps your regex as re("...")</span>
+                  </button>
                   {Object.entries(patterns).map(([key, value]) => (
                     <button
                       key={key}
@@ -307,12 +356,44 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
                 </div>
               )}
             </div>
-            {pattern && patterns[pattern] && isVariableMode && (
+            {pattern && pattern !== CUSTOM_REGEX_SENTINEL && patterns[pattern] && isVariableMode && (
               <p className="mt-1 text-xs font-mono" style={{ color: 'var(--text-muted)' }}>
                 Regex: {patterns[pattern].regex}
               </p>
             )}
+            {pattern === CUSTOM_REGEX_SENTINEL && isVariableMode && (
+              <div className="mt-2">
+                <input
+                  type="text"
+                  value={customRegex}
+                  onChange={(e) => setCustomRegex(e.target.value)}
+                  placeholder='e.g., [^.\n]+'
+                  className="w-full px-3 py-1.5 text-sm border rounded-md font-mono focus:outline-none focus:ring-1"
+                  style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+                />
+                <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  Output: <code>{'re("'}{customRegex || '...'}{'")'}</code>
+                </p>
+              </div>
+            )}
           </div>
+
+          {isVariableMode && (
+            <div className="mb-3">
+              <label className="block text-xs font-medium mb-1" style={{ color: 'var(--text-primary)' }}>Additional Filters (optional)</label>
+              <input
+                type="text"
+                value={extraFilters}
+                onChange={(e) => setExtraFilters(e.target.value)}
+                placeholder="e.g., to_int | upper | replaceall('x','y')"
+                className="w-full px-3 py-1.5 text-sm border rounded-md font-mono focus:outline-none focus:ring-1"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              />
+              <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                Free-form TTP filter chain appended after the pattern and indicators. Separate multiple filters with <code>|</code>.
+              </p>
+            </div>
+          )}
 
           {isIgnoreMode && (
             <div className="mb-3">

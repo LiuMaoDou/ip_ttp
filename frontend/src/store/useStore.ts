@@ -127,6 +127,8 @@ export interface GenerationUploadedFile {
   content: string
 }
 
+export type TemplateSaveSource = 'sample' | 'generated'
+
 interface PreparedVariable extends Variable {
   currentText: string
 }
@@ -202,7 +204,7 @@ interface AppState {
   createCategory: (templateKind: TemplateKind, vendor: string, name: string, parentId?: string | null) => Promise<void>
   updateCategory: (templateKind: TemplateKind, categoryId: string, vendor: string, name: string, parentId?: string | null) => Promise<void>
   deleteCategory: (templateKind: TemplateKind, categoryId: string) => Promise<void>
-  saveTemplate: (name: string, description: string, vendor: string, categoryPath: string[]) => Promise<void>
+  saveTemplate: (name: string, description: string, vendor: string, categoryPath: string[], source?: TemplateSaveSource) => Promise<void>
   moveTemplate: (id: string, vendor: string, categoryPath: string[]) => Promise<void>
   loadTemplate: (id: string) => Promise<void>
   deleteTemplate: (id: string) => Promise<void>
@@ -839,9 +841,11 @@ export const useStore = create<AppState>()(
         await get().fetchTemplateDirectories()
       },
 
-      saveTemplate: async (name, description, vendor, categoryPath) => {
+      saveTemplate: async (name, description, vendor, categoryPath, source = 'sample') => {
         set({ templateName: name })
-        const generatedTemplate = get().generateTemplate()
+        const generatedTemplate = source === 'sample'
+          ? get().generateTemplate()
+          : get().generatedTemplate
         const state = get()
         const currentSavedTemplate = state.selectedSavedTemplateId
           ? state.savedTemplates.find((template) => template.id === state.selectedSavedTemplateId)
