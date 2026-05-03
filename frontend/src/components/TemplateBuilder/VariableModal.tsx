@@ -235,7 +235,7 @@ export default function VariableModal({ mode, selectedText, patterns, initialVar
 
   return (
     <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }}>
-      <div className="rounded-lg p-6 w-[560px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+      <div className="template-entity-modal rounded-lg p-6 w-[560px] shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
         <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>
           {isEditMode ? 'Edit Variable' : 'Add Variable'}
         </h3>

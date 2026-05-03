@@ -1,179 +1,218 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type CSSProperties } from 'react'
 import { Variable, Group, getVariableColor } from '../../store/useStore'
-
-// Group color (orange)
-const GROUP_COLOR = '#f97316'
 
 interface VariableListProps {
   variables: Variable[]
   groups: Group[]
   onEditVariable: (variable: Variable) => void
+  onEditGroup: (group: Group) => void
   onRemoveVariable: (id: string) => void
   onRemoveGroup: (id: string) => void
   onReorderVariable: (fromIndex: number, toIndex: number) => void
 }
 
-export default function VariableList({ variables, groups, onEditVariable, onRemoveVariable, onRemoveGroup, onReorderVariable }: VariableListProps) {
+type EntityStyle = CSSProperties & {
+  '--entity-color': string
+  '--entity-bg': string
+  '--entity-bg-hover': string
+}
+
+function getVariableDisplay(variable: Variable): { name: string; descriptor: string } {
+  if (variable.syntaxMode === 'ignore') {
+    return {
+      name: 'ignore',
+      descriptor: variable.ignoreValue ? `ignore("${variable.ignoreValue}")` : 'ignore'
+    }
+  }
+
+  if (variable.syntaxMode === 'headers') {
+    return {
+      name: 'headers',
+      descriptor: variable.headersColumns ? `_headers_ | columns(${variable.headersColumns})` : 'headers'
+    }
+  }
+
+  if (variable.syntaxMode === 'end') {
+    return { name: 'end', descriptor: 'end' }
+  }
+
+  return {
+    name: variable.name,
+    descriptor: variable.pattern || ''
+  }
+}
+
+export default function VariableList({
+  variables,
+  groups,
+  onEditVariable,
+  onEditGroup,
+  onRemoveVariable,
+  onRemoveGroup,
+  onReorderVariable
+}: VariableListProps) {
   const dragIndex = useRef<number | null>(null)
   const [hoverIndex, setHoverIndex] = useState<number | null>(null)
 
-  if (variables.length === 0 && groups.length === 0) {
-    return (
-      <div className="p-4 text-center text-sm" style={{ color: 'var(--text-muted)' }}>
-        <p>No variables or groups defined</p>
-        <p className="mt-2 text-xs">Select text in the editor and right-click to add</p>
-      </div>
-    )
-  }
-
   return (
-    <div className="p-2">
-      {/* Groups section */}
-      {groups.length > 0 && (
-        <div className="mb-3">
-          <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Groups ({groups.length})</h3>
-          <div className="space-y-2">
-            {groups.map((group) => (
-              <div
-                key={group.id}
-                className="p-2 rounded-md border-l-4 group"
-                style={{
-                  borderColor: GROUP_COLOR,
-                  backgroundColor: GROUP_COLOR + '15'
-                }}
-              >
-                <div className="flex items-start justify-between">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className="text-xs px-1.5 py-0.5 rounded font-medium text-white"
-                        style={{ backgroundColor: GROUP_COLOR }}
-                      >
-                        {group.name}
-                      </span>
-                      <span className="text-xs font-mono" style={{ color: GROUP_COLOR }}>
-                        &lt;group&gt;
-                      </span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => onRemoveGroup(group.id)}
-                    className="opacity-0 group-hover:opacity-100 transition-opacity ml-2"
-                    style={{ color: 'var(--text-muted)' }}
-                    title="Remove group"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
+    <div className="variable-list-panel">
+      <div className="variable-list-header">
+        <span>变量 & 组</span>
+        <span>{variables.length}V · {groups.length}G</span>
+      </div>
+
+      {variables.length === 0 && groups.length === 0 ? (
+        <div className="variable-list-empty">
+          <p>暂无变量或组</p>
+          <span>在样本输入中选择文本，右键添加</span>
         </div>
-      )}
+      ) : (
+        <div className="variable-list-body">
+          {groups.length > 0 && (
+            <section className="variable-list-section">
+              <div className="variable-list-section-title">
+                <span>组 ({groups.length})</span>
+              </div>
 
-      {/* Variables section */}
-      {variables.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium mb-2 px-2" style={{ color: 'var(--text-secondary)' }}>Variables ({variables.length})</h3>
-          <div className="space-y-1">
-            {variables.map((variable, index) => (
-              <div key={variable.id}>
-                {hoverIndex === index && dragIndex.current !== null && dragIndex.current !== index && dragIndex.current !== index - 1 && (
-                  <div className="h-0.5 rounded mx-2 mb-1" style={{ backgroundColor: 'var(--accent-primary)' }} />
-                )}
+              {groups.map((group, index) => {
+                const colorIndex = Number.isInteger(group.colorIndex) ? group.colorIndex : index
+                const color = getVariableColor(colorIndex)
+
+                return (
                 <div
-                  draggable
-                  onDragStart={() => { dragIndex.current = index }}
-                  onDragOver={(e) => { e.preventDefault(); setHoverIndex(index) }}
-                  onDrop={() => {
-                    if (dragIndex.current !== null && dragIndex.current !== index) {
-                      onReorderVariable(dragIndex.current, index)
-                    }
-                    dragIndex.current = null
-                    setHoverIndex(null)
-                  }}
-                  onDragEnd={() => { dragIndex.current = null; setHoverIndex(null) }}
-                  className="p-2 rounded-md border-l-4 group flex items-start gap-1"
+                  key={group.id}
+                  className="variable-list-group-row"
                   style={{
-                    borderColor: getVariableColor(variable.colorIndex),
-                    backgroundColor: getVariableColor(variable.colorIndex) + '15',
-                    opacity: dragIndex.current === index ? 0.4 : 1,
-                    cursor: 'grab'
-                  }}
+                    '--entity-color': color,
+                    '--entity-bg': `${color}1f`,
+                    '--entity-bg-hover': `${color}2e`
+                  } as EntityStyle}
                 >
-                  {/* Drag handle */}
-                  <div
-                    className="flex-shrink-0 mt-0.5 opacity-30 hover:opacity-70 transition-opacity"
-                    style={{ color: 'var(--text-muted)', cursor: 'grab' }}
-                  >
-                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 16 16">
-                      <circle cx="5" cy="4" r="1.2" />
-                      <circle cx="11" cy="4" r="1.2" />
-                      <circle cx="5" cy="8" r="1.2" />
-                      <circle cx="11" cy="8" r="1.2" />
-                      <circle cx="5" cy="12" r="1.2" />
-                      <circle cx="11" cy="12" r="1.2" />
-                    </svg>
+                  <svg className="variable-list-type-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <path d="M9 9h6M9 15h6" />
+                  </svg>
+                  <div className="variable-list-copy">
+                    <span className="variable-list-name">{group.name}</span>
+                    <span className="variable-list-meta">
+                      {group.endLine - group.startLine + 1}L | {group.startLine}-{group.endLine}
+                    </span>
                   </div>
+                  <div className="variable-list-actions">
+                    <button
+                      type="button"
+                      onClick={() => onEditGroup(group)}
+                      className="variable-list-icon-button"
+                      title="编辑组"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveGroup(group.id)}
+                      className="variable-list-icon-button"
+                      title="删除组"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M18 6L6 18M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+                )
+              })}
+            </section>
+          )}
 
-                  <div className="flex items-start justify-between gap-2 flex-1 min-w-0">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span
-                          className="text-xs px-1.5 py-0.5 rounded font-medium text-white"
-                          style={{ backgroundColor: getVariableColor(variable.colorIndex) }}
+          {variables.length > 0 && (
+            <section className="variable-list-section">
+              <div className="variable-list-section-title">
+                <span>变量 ({variables.length})</span>
+              </div>
+
+              {variables.map((variable, index) => {
+                const colorIndex = Number.isInteger(variable.colorIndex) ? variable.colorIndex : index
+                const color = getVariableColor(colorIndex)
+                const { name, descriptor } = getVariableDisplay(variable)
+
+                return (
+                  <div key={variable.id} className="variable-list-drag-wrap">
+                    {hoverIndex === index && dragIndex.current !== null && dragIndex.current !== index && (
+                      <div className="variable-list-drop-line" />
+                    )}
+                    <div
+                      draggable
+                      onDragStart={() => { dragIndex.current = index }}
+                      onDragOver={(event) => { event.preventDefault(); setHoverIndex(index) }}
+                      onDrop={() => {
+                        if (dragIndex.current !== null && dragIndex.current !== index) {
+                          onReorderVariable(dragIndex.current, index)
+                        }
+                        dragIndex.current = null
+                        setHoverIndex(null)
+                      }}
+                      onDragEnd={() => { dragIndex.current = null; setHoverIndex(null) }}
+                      className="variable-list-variable-row"
+                      style={{
+                        '--entity-color': color,
+                        '--entity-bg': `${color}1a`,
+                        '--entity-bg-hover': `${color}29`,
+                        opacity: dragIndex.current === index ? 0.4 : 1
+                      } as EntityStyle}
+                    >
+                      <svg className="variable-list-drag-handle" viewBox="0 0 8 12" fill="currentColor">
+                        <circle cx="2" cy="2" r="1.2" />
+                        <circle cx="6" cy="2" r="1.2" />
+                        <circle cx="2" cy="6" r="1.2" />
+                        <circle cx="6" cy="6" r="1.2" />
+                        <circle cx="2" cy="10" r="1.2" />
+                        <circle cx="6" cy="10" r="1.2" />
+                      </svg>
+
+                      <div className="variable-list-copy">
+                        <span className="variable-list-name">{name}</span>
+                        {descriptor && <span className="variable-list-meta">| {descriptor}</span>}
+                        {variable.indicators && variable.indicators.length > 0 && (
+                          <span className="variable-list-tags">
+                            {variable.indicators.map((indicator) => (
+                              <code key={indicator}>{indicator}</code>
+                            ))}
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="variable-list-actions">
+                        <button
+                          type="button"
+                          onClick={() => onEditVariable(variable)}
+                          className="variable-list-icon-button"
+                          title="编辑变量"
                         >
-                          {variable.syntaxMode === 'ignore' ? 'ignore' : variable.syntaxMode === 'headers' ? 'headers' : variable.syntaxMode === 'end' ? 'end' : variable.name}
-                        </span>
-                        {variable.syntaxMode && variable.syntaxMode !== 'variable' ? (
-                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                            {variable.syntaxMode === 'ignore' && variable.ignoreValue
-                              ? `ignore("${variable.ignoreValue}")`
-                              : variable.syntaxMode === 'headers' && variable.headersColumns
-                                ? `_headers_ | columns(${variable.headersColumns})`
-                                : variable.syntaxMode}
-                          </span>
-                        ) : variable.pattern ? (
-                          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>| {variable.pattern}</span>
-                        ) : null}
-                        {variable.indicators?.map((indicator) => (
-                          <span
-                            key={indicator}
-                            className="text-xs px-1.5 py-0.5 rounded font-mono"
-                            style={{ backgroundColor: 'var(--bg-tertiary)', color: 'var(--accent-primary)' }}
-                          >
-                            {indicator}
-                          </span>
-                        ))}
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                            <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onRemoveVariable(variable.id)}
+                          className="variable-list-icon-button"
+                          title="删除变量"
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M18 6L6 18M6 6l12 12" />
+                          </svg>
+                        </button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity ml-2">
-                      <button
-                        onClick={() => onEditVariable(variable)}
-                        style={{ color: 'var(--text-muted)' }}
-                        title="Edit variable"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536M9 11l6.232-6.232a2.5 2.5 0 013.536 3.536L12.536 14.536A2 2 0 0111.12 15.12L8 16l.88-3.12A2 2 0 019.464 11.536z" />
-                        </svg>
-                      </button>
-                      <button
-                        onClick={() => onRemoveVariable(variable.id)}
-                        style={{ color: 'var(--text-muted)' }}
-                        title="Remove variable"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                        </svg>
-                      </button>
-                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
-          </div>
+                )
+              })}
+            </section>
+          )}
         </div>
       )}
     </div>
