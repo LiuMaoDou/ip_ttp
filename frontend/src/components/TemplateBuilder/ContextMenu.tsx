@@ -3,31 +3,44 @@ interface ContextMenuProps {
   y: number
   selectedText: string
   onAddVariable: () => void
+  onAddGroup: () => void
   onClose: () => void
 }
 
-export default function ContextMenu({ x, y, selectedText, onAddVariable, onClose }: ContextMenuProps) {
+export default function ContextMenu({ x, y, selectedText, onAddVariable, onAddGroup, onClose }: ContextMenuProps) {
+  const previewText = selectedText.replace(/\s+/g, ' ').trim()
+
   return (
     <>
-      {/* Backdrop */}
-      <div className="fixed inset-0 z-40" onClick={onClose} />
-
-      {/* Menu */}
+      <div className="sample-context-backdrop" onClick={onClose} />
       <div
-        className="fixed z-50 bg-gray-800 border border-gray-600 rounded-lg shadow-xl py-1 min-w-[200px]"
+        className="sample-context-menu"
         style={{ left: x, top: y }}
-      >
-        <button
-          onClick={onAddVariable}
-          className="w-full px-4 py-2 text-left text-sm hover:bg-gray-700 flex items-center gap-2"
+        onContextMenu={(event) => event.preventDefault()}
+        onClick={(event) => event.stopPropagation()}
         >
-          <span className="text-blue-400">+</span>
-          <span>Add as Variable</span>
-        </button>
-        <div className="border-t border-gray-700 my-1" />
-        <div className="px-4 py-2 text-xs text-gray-400">
-          Selected: <span className="text-white">{selectedText.substring(0, 30)}{selectedText.length > 30 ? '...' : ''}</span>
+        <div className="sample-context-selected">
+          <div className="sample-context-selected-label">已选中：</div>
+          <div className="sample-context-selected-text" title={selectedText}>
+            "{previewText}"
+          </div>
         </div>
+        <button
+          type="button"
+          onClick={onAddVariable}
+          className="sample-context-item"
+        >
+          <span className="sample-context-icon sample-context-icon-variable" />
+          <span>添加为变量</span>
+        </button>
+        <button
+          type="button"
+          onClick={onAddGroup}
+          className="sample-context-item"
+        >
+          <span className="sample-context-icon sample-context-icon-group" />
+          <span>添加为组</span>
+        </button>
       </div>
     </>
   )

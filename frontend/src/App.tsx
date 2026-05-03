@@ -1,23 +1,61 @@
 import { useEffect, useState } from 'react'
 import { ConfigGeneration, TemplateBuilder, TestResults } from './components'
-import { useStore } from './store/useStore'
+import { CodeIcon, StatusDot } from './ui/primitives'
 import { getPatterns } from './services/api'
+import { useStore } from './store/useStore'
 
 type Tab = 'template' | 'test' | 'config'
+type BackendStatus = 'checking' | 'connected' | 'error'
+
+function TestIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2" />
+      <path d="M9 5a2 2 0 002 2h2a2 2 0 002-2m-6 9l2 2 4-4" />
+    </svg>
+  )
+}
+
+function ConfigIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M4 6h16M4 12h16M4 18h10" />
+    </svg>
+  )
+}
+
+function ThemeIcon({ theme }: { theme: 'dark' | 'light' }) {
+  return theme === 'dark' ? (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="5" />
+      <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2" />
+    </svg>
+  ) : (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z" />
+    </svg>
+  )
+}
+
+function GithubIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.531 1.032 1.531 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+    </svg>
+  )
+}
 
 export default function App() {
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
-  const [backendStatus, setBackendStatus] = useState<'checking' | 'connected' | 'error'>('checking')
-
+  const [backendStatus, setBackendStatus] = useState<BackendStatus>('checking')
   const {
+    activeTab,
+    setActiveTab,
+    theme,
+    toggleTheme,
     setPatterns,
     fetchSavedTemplates,
     fetchTemplateDirectories,
-    fetchGenerationTemplates,
-    theme,
-    toggleTheme,
-    activeTab,
-    setActiveTab
+    fetchGenerationTemplates
   } = useStore()
 
   useEffect(() => {
@@ -25,7 +63,7 @@ export default function App() {
   }, [theme])
 
   useEffect(() => {
-    const loadAppData = async () => {
+    const load = async () => {
       try {
         const [patterns] = await Promise.all([
           getPatterns(),
@@ -36,167 +74,65 @@ export default function App() {
         setPatterns(patterns)
         setBackendStatus('connected')
       } catch (error) {
-        console.error('Failed to load app data:', error)
+        console.error(error)
         setBackendStatus('error')
       }
     }
-    void loadAppData()
+    void load()
   }, [fetchGenerationTemplates, fetchSavedTemplates, fetchTemplateDirectories, setPatterns])
 
-  const tabs: { id: Tab; label: string; icon: JSX.Element }[] = [
-    {
-      id: 'template',
-      label: 'Template Builder',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
-        </svg>
-      )
-    },
-    {
-      id: 'test',
-      label: 'Test & Results',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />
-        </svg>
-      )
-    },
-    {
-      id: 'config',
-      label: 'Config Generation',
-      icon: (
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
-        </svg>
-      )
-    }
+  const tabs: Array<{ id: Tab; label: string; icon: JSX.Element }> = [
+    { id: 'template', label: '模板构建', icon: <CodeIcon /> },
+    { id: 'test', label: '测试 & 结果', icon: <TestIcon /> },
+    { id: 'config', label: '配置生成', icon: <ConfigIcon /> }
   ]
 
   return (
-    <div className="h-screen flex flex-col" style={{ backgroundColor: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-      <header className="px-4 py-3 border-b" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="min-w-0">
-              <h1 className="text-xl font-bold leading-none" style={{ color: 'var(--text-primary)' }}>mini-IPMaster</h1>
-              <p className="text-xs mt-1" style={{ color: 'var(--text-muted)' }}>Template parsing workspace</p>
+    <div className="prototype-shell">
+      <header className="top-nav">
+        <div className="top-left">
+          <div className="brand-block">
+            <div className="brand-mark"><CodeIcon /></div>
+            <div className="brand-copy">
+              <strong>mini-IPMaster</strong>
+              <span>TTP 解析工作台</span>
             </div>
           </div>
-
-          <div className="flex items-center gap-4">
-            <button
-              onClick={toggleTheme}
-              className="p-2 rounded-lg transition-colors hover:opacity-80"
-              style={{ backgroundColor: 'var(--bg-tertiary)' }}
-              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-            >
-              {theme === 'dark' ? (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-primary)' }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              ) : (
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" style={{ color: 'var(--text-primary)' }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                </svg>
-              )}
-            </button>
-
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
-              <div className={`w-2 h-2 rounded-full ${
-                backendStatus === 'checking' ? 'bg-yellow-500 animate-pulse' :
-                backendStatus === 'connected' ? 'bg-green-500' :
-                'bg-red-500'
-              }`} />
-              <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                {backendStatus === 'checking' ? 'Connecting...' :
-                 backendStatus === 'connected' ? 'Backend connected' :
-                 'Backend offline'}
-              </span>
-            </div>
-          </div>
+          <nav className="top-tabs">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className={`top-tab ${activeTab === tab.id ? 'is-active' : ''}`}
+                onClick={() => setActiveTab(tab.id)}
+              >
+                <span>{tab.icon}</span>
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+        <div className="top-actions">
+          <StatusDot status={backendStatus} />
+          <button type="button" className="top-icon-button" onClick={toggleTheme} title="切换明暗主题">
+            <ThemeIcon theme={theme} />
+          </button>
+          <a className="top-icon-button" href="https://github.com/LiuMaoDou/ip_ttp" target="_blank" rel="noreferrer" title="GitHub">
+            <GithubIcon />
+          </a>
         </div>
       </header>
-
-      <nav className="border-b hidden md:flex" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-        <div className="flex px-2">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className="flex items-center gap-2 px-5 py-3 text-sm font-medium transition-colors rounded-t-md"
-              style={{
-                color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)',
-                backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
-                borderBottom: activeTab === tab.id ? '2px solid var(--accent-primary)' : '2px solid transparent'
-              }}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      </nav>
-
-      <div className="md:hidden border-b p-2" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-        <button
-          onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-          className="flex items-center gap-2 px-4 py-2"
-          style={{ color: 'var(--text-primary)' }}
-        >
-          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
-          </svg>
-          <span>{tabs.find((t) => t.id === activeTab)?.label}</span>
-        </button>
-      </div>
-
-      {isMobileMenuOpen && (
-        <div className="md:hidden border-b" style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => {
-                setActiveTab(tab.id)
-                setIsMobileMenuOpen(false)
-              }}
-              className="flex items-center gap-2 w-full px-4 py-3 text-left"
-              style={{
-                color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-secondary)',
-                backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent'
-              }}
-            >
-              {tab.icon}
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <main className="flex-1 overflow-hidden relative">
-        <div className="h-full" style={{ display: activeTab === 'template' ? 'block' : 'none' }}>
+      <main className="prototype-content">
+        <section className="prototype-tab" style={{ display: activeTab === 'template' ? 'block' : 'none' }}>
           <TemplateBuilder />
-        </div>
-        <div className="h-full" style={{ display: activeTab === 'test' ? 'block' : 'none' }}>
+        </section>
+        <section className="prototype-tab" style={{ display: activeTab === 'test' ? 'block' : 'none' }}>
           <TestResults />
-        </div>
-        <div className="h-full" style={{ display: activeTab === 'config' ? 'block' : 'none' }}>
+        </section>
+        <section className="prototype-tab" style={{ display: activeTab === 'config' ? 'block' : 'none' }}>
           <ConfigGeneration />
-        </div>
+        </section>
       </main>
-
-      <footer className="px-4 py-2 text-center text-xs border-t" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-muted)' }}>
-        mini-IPMaster |{' '}
-        <a
-          href="https://github.com/LiuMaoDou/ip_ttp/tree/master"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: 'var(--accent-primary)' }}
-          className="hover:opacity-80"
-        >
-          GitHub
-        </a>
-      </footer>
     </div>
   )
 }

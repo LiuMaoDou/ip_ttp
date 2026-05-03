@@ -826,7 +826,7 @@ export default function ConfigGeneration() {
     <>
       {showSaveModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) setShowSaveModal(false) }}>
-          <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+          <div className="generation-save-modal rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             <h3 className="text-lg font-semibold mb-4" style={{ color: 'var(--text-primary)' }}>Save Template</h3>
             <div className="mb-3">
               <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Name</div>

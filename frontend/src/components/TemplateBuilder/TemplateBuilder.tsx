@@ -2,17 +2,23 @@ import { useRef, useState, useCallback, useEffect, type ChangeEvent } from 'reac
 import Editor, { OnMount } from '@monaco-editor/react'
 import type { editor, IRange, IDisposable } from 'monaco-editor'
 import { saveAs } from 'file-saver'
+import {
+  createCategory as createCategoryRequest,
+  createTemplate as createTemplateRequest,
+  createVendor as createVendorRequest,
+  updateTemplate as updateTemplateRequest,
+  type SavedTemplatePayload,
+  type TemplateCategory
+} from '../../services/api'
 import { useStore, getVariableColor, type Group, type TemplateSaveSource, type Variable, type VariableSyntaxMode } from '../../store/useStore'
-import { getParameterPlaceholderDecorations, sanitizeFileNameSegment } from '../../utils'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
 import VariableModal from './VariableModal'
 import GroupModal from './GroupModal'
 import VariableList from './VariableList'
+import ContextMenu from './ContextMenu'
 
 const VARIABLE_COLORS = Array.from({ length: 12 }, (_, index) => getVariableColor(index))
-
-// Group color palette (distinct from variables)
-const GROUP_COLOR = '#f97316'
+const EDITOR_FONT_FAMILY = "'JetBrains Mono', 'Consolas', 'Microsoft YaHei', monospace"
 
 // Current selection state for the modal
 interface CurrentSelection {
@@ -28,6 +34,17 @@ interface GroupSelection {
   text: string
   startLine: number
   endLine: number
+}
+
+interface SampleContextMenuState extends CurrentSelection {
+  x: number
+  y: number
+}
+
+interface TemplateLibraryImport {
+  vendors: string[]
+  categories: Array<{ vendor: string; path: string[] }>
+  templates: Array<{ id?: string; payload: SavedTemplatePayload }>
 }
 
 interface MonacoRangeShape {
@@ -74,6 +91,150 @@ function isCollapsedRange(range: MonacoRangeShape): boolean {
     range.startLineNumber === range.endLineNumber &&
     range.startColumn === range.endColumn
   )
+}
+
+function getEntityColorIndex(colorIndex: number | undefined, fallbackIndex: number): number {
+  return typeof colorIndex === 'number' && Number.isInteger(colorIndex) ? colorIndex : fallbackIndex
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function getStringField(record: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string') {
+      return value
+    }
+  }
+
+  return ''
+}
+
+function toStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.map((item) => typeof item === 'string' ? item.trim() : '').filter(Boolean)
+    : []
+}
+
+function toRecordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter(isRecord) : []
+}
+
+function normalizeImportVendor(value: unknown): string | null {
+  if (typeof value === 'string') {
+    const vendor = value.trim()
+    return vendor || null
+  }
+
+  if (isRecord(value)) {
+    const vendor = getStringField(value, 'name').trim()
+    return vendor || null
+  }
+
+  return null
+}
+
+function normalizeImportCategory(value: unknown): { vendor: string; path: string[] } | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const vendor = getStringField(value, 'vendor').trim() || 'Unassigned'
+  const path = toStringArray(value.path)
+  if (path.length === 0) {
+    return null
+  }
+
+  return { vendor, path }
+}
+
+function normalizeImportTemplate(value: unknown): { id?: string; payload: SavedTemplatePayload } | null {
+  if (!isRecord(value)) {
+    return null
+  }
+
+  const name = getStringField(value, 'name').trim()
+  if (!name) {
+    return null
+  }
+
+  return {
+    id: getStringField(value, 'id').trim() || undefined,
+    payload: {
+      name,
+      description: getStringField(value, 'description'),
+      vendor: getStringField(value, 'vendor').trim() || 'Unassigned',
+      categoryPath: toStringArray(value.categoryPath ?? value.category_path),
+      sampleText: getStringField(value, 'sampleText', 'sample_text'),
+      variables: toRecordArray(value.variables),
+      groups: toRecordArray(value.groups),
+      generatedTemplate: getStringField(value, 'generatedTemplate', 'generated_template')
+    }
+  }
+}
+
+function parseTemplateLibraryImport(content: string): TemplateLibraryImport | null {
+  let parsed: unknown
+
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+
+  if (!isRecord(parsed) || !Array.isArray(parsed.templates)) {
+    return null
+  }
+
+  const templates = parsed.templates
+    .map(normalizeImportTemplate)
+    .filter((template): template is { id?: string; payload: SavedTemplatePayload } => template !== null)
+
+  if (templates.length === 0) {
+    return null
+  }
+
+  const vendors = [
+    ...(Array.isArray(parsed.vendors) ? parsed.vendors.map(normalizeImportVendor) : []),
+    ...templates.map((template) => template.payload.vendor)
+  ].filter((vendor): vendor is string => Boolean(vendor))
+
+  const categories = [
+    ...(Array.isArray(parsed.categories) ? parsed.categories.map(normalizeImportCategory) : []),
+    ...templates
+      .filter((template) => template.payload.categoryPath.length > 0)
+      .map((template) => ({ vendor: template.payload.vendor, path: template.payload.categoryPath }))
+  ].filter((category): category is { vendor: string; path: string[] } => category !== null)
+
+  return {
+    vendors: Array.from(new Set(vendors)),
+    categories,
+    templates
+  }
+}
+
+function getCategoryKey(vendor: string, path: string[]): string {
+  return `${vendor}\u0000${path.join('\u0000')}`
+}
+
+function indexCategories(categories: TemplateCategory[]): Map<string, TemplateCategory> {
+  return new Map(categories.map((category) => [getCategoryKey(category.vendor, category.path), category]))
+}
+
+function refreshEditorFontMetrics(
+  monaco: typeof import('monaco-editor'),
+  editorInstance: editor.IStandaloneCodeEditor
+) {
+  if (!('fonts' in document)) {
+    return
+  }
+
+  void document.fonts.ready.then(() => {
+    monaco.editor.remeasureFonts()
+    editorInstance.layout()
+  })
 }
 
 function createRange(
@@ -143,9 +304,52 @@ function getGroupTrackingRange(
   )
 }
 
-function getTemplateDownloadName(templateName?: string): string {
-  const normalizedName = templateName ? sanitizeFileNameSegment(templateName) : ''
-  return normalizedName ? `${normalizedName}.ttp` : 'template-builder-template.ttp'
+function getGeneratedTemplateDecorations(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel,
+  variables: Variable[]
+): editor.IModelDeltaDecoration[] {
+  const variableByName = new Map(variables.map((variable) => [variable.name, variable]))
+  const decorations: editor.IModelDeltaDecoration[] = []
+  const text = model.getValue()
+
+  for (const match of text.matchAll(/<\s*\/?\s*group\b[^>]*>/gi)) {
+    const startOffset = match.index ?? 0
+    const endOffset = startOffset + match[0].length
+    const startPosition = model.getPositionAt(startOffset)
+    const endPosition = model.getPositionAt(endOffset)
+
+    decorations.push({
+      range: new monaco.Range(startPosition.lineNumber, startPosition.column, endPosition.lineNumber, endPosition.column),
+      options: {
+        inlineClassName: 'generated-template-group-tag',
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    })
+  }
+
+  for (const match of text.matchAll(/\{\{\s*([\s\S]*?)\s*\}\}/g)) {
+    const startOffset = match.index ?? 0
+    const endOffset = startOffset + match[0].length
+    const startPosition = model.getPositionAt(startOffset)
+    const endPosition = model.getPositionAt(endOffset)
+    const expression = match[1]?.trim() || ''
+    const variableName = expression.split('|')[0]?.trim() || ''
+    const variable = variableByName.get(variableName)
+    const colorIndex = variable ? getEntityColorIndex(variable.colorIndex, 0) % VARIABLE_COLORS.length : null
+
+    decorations.push({
+      range: new monaco.Range(startPosition.lineNumber, startPosition.column, endPosition.lineNumber, endPosition.column),
+      options: {
+        inlineClassName: colorIndex === null
+          ? 'template-parameter-highlight'
+          : `template-parameter-highlight template-parameter-color-${colorIndex}`,
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    })
+  }
+
+  return decorations
 }
 
 function createGeneratedTemplateVariableId(name: string, index: number) {
@@ -336,7 +540,9 @@ export default function TemplateBuilder() {
   const [showGroupModal, setShowGroupModal] = useState(false)
   const [currentSelection, setCurrentSelection] = useState<CurrentSelection | null>(null)
   const [editingVariable, setEditingVariable] = useState<Variable | null>(null)
+  const [editingGroup, setEditingGroup] = useState<Group | null>(null)
   const [groupSelection, setGroupSelection] = useState<GroupSelection | null>(null)
+  const [sampleContextMenu, setSampleContextMenu] = useState<SampleContextMenuState | null>(null)
   const [showTemplateNameModal, setShowTemplateNameModal] = useState(false)
   const [templateNameInput, setTemplateNameInput] = useState('')
   const [templateVendorInput, setTemplateVendorInput] = useState('Unassigned')
@@ -348,6 +554,8 @@ export default function TemplateBuilder() {
   const [templateSaveSource, setTemplateSaveSource] = useState<TemplateSaveSource>('sample')
   const [isEditorReady, setIsEditorReady] = useState(false)
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
+  const [isExportingTemplates, setIsExportingTemplates] = useState(false)
+  const [isImportingTemplates, setIsImportingTemplates] = useState(false)
   const pendingSyncFrameRef = useRef<number | null>(null)
 
   const {
@@ -362,6 +570,7 @@ export default function TemplateBuilder() {
     reorderVariables,
     addGroup,
     removeGroup,
+    updateGroup,
     setTemplateName,
     newTemplate,
     patterns,
@@ -369,6 +578,8 @@ export default function TemplateBuilder() {
     saveTemplate,
     loadTemplate,
     deleteTemplate,
+    fetchSavedTemplates,
+    fetchTemplateDirectories,
     templateName,
     currentTemplateVendor,
     currentTemplateCategoryPath,
@@ -381,7 +592,7 @@ export default function TemplateBuilder() {
   } = useStore()
 
   const selectedSavedTemplate = savedTemplates.find((savedTemplate) => savedTemplate.id === selectedSavedTemplateId)
-  const templateSaveSourceLabel = templateSaveSource === 'sample' ? 'Sample Input' : 'Generated Template'
+  const templateSaveSourceLabel = templateSaveSource === 'sample' ? '样本输入' : '生成模板'
 
   const rebuildTrackingDecorations = useCallback(() => {
     if (!editorRef.current || !monacoRef.current) {
@@ -634,7 +845,6 @@ export default function TemplateBuilder() {
     if (source === 'sample') {
       flushTrackedRangeSync()
       useStore.getState().generateTemplate()
-      syncGeneratedTemplateVariables()
       return 'generated'
     }
 
@@ -665,19 +875,21 @@ export default function TemplateBuilder() {
         return
       }
 
+      const colorIndex = getEntityColorIndex(v.colorIndex, index) % VARIABLE_COLORS.length
+
       newDecorations.push({
         range,
         options: {
-          className: `variable-highlight-${index % 12}`,
+          className: `variable-highlight-${colorIndex}`,
           inlineClassName: 'inline-variable-highlight',
           inlineClassNameAffectsLetterSpacing: true,
           before: {
             content: v.name,
-            inlineClassName: `variable-label variable-label-${index % 12}`,
+            inlineClassName: `variable-label variable-label-${colorIndex}`,
             cursorStops: monaco.editor.InjectedTextCursorStops.Left
           },
           overviewRuler: {
-            color: getVariableColor(v.colorIndex),
+            color: getVariableColor(colorIndex),
             position: monaco.editor.OverviewRulerLane.Center
           }
         }
@@ -685,25 +897,29 @@ export default function TemplateBuilder() {
     })
 
     // Add group decorations - highlight current start and end lines
-    groups.forEach((g) => {
+    groups.forEach((g, index) => {
       const lineCount = model.getLineCount()
       if (g.startLine < 1 || g.endLine < 1 || g.startLine > g.endLine || g.startLine > lineCount || g.endLine > lineCount) {
         return
       }
+
+      const colorIndex = getEntityColorIndex(g.colorIndex, index) % VARIABLE_COLORS.length
+      const groupLineClassName = `group-line-highlight group-line-highlight-${colorIndex}`
+      const groupMarkerClassName = `group-marker group-marker-${colorIndex}`
 
       // Add decoration for the start line (show group start marker)
       newDecorations.push({
         range: new monaco.Range(g.startLine, 1, g.startLine, 1),
         options: {
           isWholeLine: true,
-          className: 'group-line-highlight',
+          className: groupLineClassName,
           before: {
             content: `<group name="${g.name}">`,
-            inlineClassName: 'group-marker group-marker-start',
+            inlineClassName: `${groupMarkerClassName} group-marker-start`,
             cursorStops: monaco.editor.InjectedTextCursorStops.Left
           },
           overviewRuler: {
-            color: GROUP_COLOR,
+            color: getVariableColor(colorIndex),
             position: monaco.editor.OverviewRulerLane.Left
           }
         }
@@ -715,10 +931,10 @@ export default function TemplateBuilder() {
           range: new monaco.Range(g.endLine, 1, g.endLine, 1),
           options: {
             isWholeLine: true,
-            className: 'group-line-highlight',
+            className: groupLineClassName,
             after: {
               content: '</group>',
-              inlineClassName: 'group-marker group-marker-end',
+              inlineClassName: `${groupMarkerClassName} group-marker-end`,
               cursorStops: monaco.editor.InjectedTextCursorStops.Right
             }
           }
@@ -729,10 +945,10 @@ export default function TemplateBuilder() {
           range: new monaco.Range(g.startLine, 1, g.startLine, 1),
           options: {
             isWholeLine: true,
-            className: 'group-line-highlight',
+            className: groupLineClassName,
             after: {
               content: '</group>',
-              inlineClassName: 'group-marker group-marker-end',
+              inlineClassName: `${groupMarkerClassName} group-marker-end`,
               cursorStops: monaco.editor.InjectedTextCursorStops.Right
             }
           }
@@ -834,6 +1050,19 @@ export default function TemplateBuilder() {
         background-color: ${color} !important;
         color: white !important;
       }
+      .group-line-highlight-${i} {
+        background-color: ${color}${groupBgOpacity} !important;
+        border-left: 3px solid ${color} !important;
+      }
+      .group-marker-${i}.group-marker-start {
+        background-color: ${color} !important;
+        color: white !important;
+      }
+      .group-marker-${i}.group-marker-end {
+        background-color: ${color}${isDark ? '33' : '22'} !important;
+        color: ${color} !important;
+        border: 1px solid ${color}${isDark ? '88' : '66'} !important;
+      }
     `).join('\n')
 
     styleEl.textContent = cssRules + `
@@ -845,8 +1074,8 @@ export default function TemplateBuilder() {
         font-weight: bold;
       }
       .group-line-highlight {
-        background-color: ${GROUP_COLOR}${groupBgOpacity} !important;
-        border-left: 3px solid ${GROUP_COLOR} !important;
+        border-left-width: 3px !important;
+        border-left-style: solid !important;
       }
       .group-marker {
         font-family: var(--font-mono);
@@ -856,13 +1085,9 @@ export default function TemplateBuilder() {
         font-weight: bold;
       }
       .group-marker-start {
-        background-color: ${GROUP_COLOR} !important;
-        color: white !important;
         margin-right: 8px;
       }
       .group-marker-end {
-        background-color: ${isDark ? '#4a4a5a' : '#94a3b8'} !important;
-        color: ${isDark ? '#f97316' : '#ea580c'} !important;
         margin-left: 8px;
       }
     `
@@ -893,9 +1118,9 @@ export default function TemplateBuilder() {
 
     generatedParameterDecorationsRef.current = generatedEditorRef.current.deltaDecorations(
       generatedParameterDecorationsRef.current,
-      getParameterPlaceholderDecorations(generatedMonacoRef.current, model)
+      getGeneratedTemplateDecorations(generatedMonacoRef.current, model, variables)
     )
-  }, [generatedTemplate])
+  }, [generatedTemplate, variables])
 
   // Update editor theme when app theme changes
   useEffect(() => {
@@ -907,10 +1132,60 @@ export default function TemplateBuilder() {
     }
   }, [theme])
 
+  useEffect(() => {
+    if (!sampleContextMenu) {
+      return
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setSampleContextMenu(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [sampleContextMenu])
+
+  const openVariableModalFromSelection = useCallback((selection: CurrentSelection) => {
+    setEditingVariable(null)
+    setCurrentSelection(selection)
+    setShowModal(true)
+  }, [])
+
+  const openGroupModalFromSelection = useCallback((selection: GroupSelection) => {
+    setEditingGroup(null)
+    setGroupSelection(selection)
+    setShowGroupModal(true)
+  }, [])
+
+  const handleSampleContextAddVariable = useCallback(() => {
+    if (!sampleContextMenu) {
+      return
+    }
+
+    openVariableModalFromSelection(sampleContextMenu)
+    setSampleContextMenu(null)
+  }, [sampleContextMenu, openVariableModalFromSelection])
+
+  const handleSampleContextAddGroup = useCallback(() => {
+    if (!sampleContextMenu) {
+      return
+    }
+
+    openGroupModalFromSelection({
+      text: sampleContextMenu.text,
+      startLine: sampleContextMenu.startLine,
+      endLine: sampleContextMenu.endLine
+    })
+    setSampleContextMenu(null)
+  }, [sampleContextMenu, openGroupModalFromSelection])
+
   // Handle sample editor mount
   const handleEditorMount: OnMount = (editorInstance, monaco) => {
     editorRef.current = editorInstance
     monacoRef.current = monaco
+    refreshEditorFontMetrics(monaco, editorInstance)
 
     // Define dark theme
     monaco.editor.defineTheme('ttp-dark', {
@@ -949,15 +1224,13 @@ export default function TemplateBuilder() {
 
         const selectedText = model.getValueInRange(selection)
 
-        setEditingVariable(null)
-        setCurrentSelection({
+        openVariableModalFromSelection({
           text: selectedText,
           startLine: selection.startLineNumber,
           startColumn: selection.startColumn,
           endLine: selection.endLineNumber,
           endColumn: selection.endColumn
         })
-        setShowModal(true)
       }
     })
 
@@ -976,13 +1249,46 @@ export default function TemplateBuilder() {
 
         const selectedText = model.getValueInRange(selection)
 
-        setGroupSelection({
+        openGroupModalFromSelection({
           text: selectedText,
           startLine: selection.startLineNumber,
           endLine: selection.endLineNumber
         })
-        setShowGroupModal(true)
       }
+    })
+
+    const editorDomNode = editorInstance.getDomNode()
+    const handleSampleContextMenu = (event: MouseEvent) => {
+      const selection = editorInstance.getSelection()
+      const model = editorInstance.getModel()
+
+      if (!selection || selection.isEmpty() || !model) {
+        setSampleContextMenu(null)
+        return
+      }
+
+      const selectedText = model.getValueInRange(selection)
+      if (!selectedText.trim()) {
+        setSampleContextMenu(null)
+        return
+      }
+
+      event.preventDefault()
+      event.stopPropagation()
+      setSampleContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        text: selectedText,
+        startLine: selection.startLineNumber,
+        startColumn: selection.startColumn,
+        endLine: selection.endLineNumber,
+        endColumn: selection.endColumn
+      })
+    }
+
+    editorDomNode?.addEventListener('contextmenu', handleSampleContextMenu)
+    editorInstance.onDidDispose(() => {
+      editorDomNode?.removeEventListener('contextmenu', handleSampleContextMenu)
     })
 
     rebuildTrackingDecorations()
@@ -993,6 +1299,7 @@ export default function TemplateBuilder() {
   const handleGeneratedEditorMount: OnMount = (editorInstance, monaco) => {
     generatedEditorRef.current = editorInstance
     generatedMonacoRef.current = monaco
+    refreshEditorFontMetrics(monaco, editorInstance)
 
     // Use same themes
     monaco.editor.defineTheme('ttp-dark', {
@@ -1019,7 +1326,7 @@ export default function TemplateBuilder() {
     if (model) {
       generatedParameterDecorationsRef.current = editorInstance.deltaDecorations(
         generatedParameterDecorationsRef.current,
-        getParameterPlaceholderDecorations(monaco, model)
+        getGeneratedTemplateDecorations(monaco, model, variables)
       )
     }
   }
@@ -1083,8 +1390,31 @@ export default function TemplateBuilder() {
     setShowModal(true)
   }, [])
 
+  const handleEditGroup = useCallback((group: Group) => {
+    const lines = sampleText.split('\n')
+    setEditingGroup(group)
+    setGroupSelection({
+      text: lines.slice(group.startLine - 1, group.endLine).join('\n'),
+      startLine: group.startLine,
+      endLine: group.endLine
+    })
+    setShowGroupModal(true)
+  }, [sampleText])
+
+  const handleGroupModalClose = useCallback(() => {
+    setShowGroupModal(false)
+    setGroupSelection(null)
+    setEditingGroup(null)
+  }, [])
+
   const handleGroupCreated = useCallback((name: string) => {
     if (!groupSelection) return
+
+    if (editingGroup) {
+      updateGroup(editingGroup.id, { name })
+      handleGroupModalClose()
+      return
+    }
 
     addGroup({
       name,
@@ -1092,9 +1422,8 @@ export default function TemplateBuilder() {
       endLine: groupSelection.endLine
     })
 
-    setShowGroupModal(false)
-    setGroupSelection(null)
-  }, [groupSelection, addGroup])
+    handleGroupModalClose()
+  }, [groupSelection, editingGroup, updateGroup, addGroup, handleGroupModalClose])
 
   const handleSaveTemplate = useCallback(async (source: TemplateSaveSource) => {
     const hasSampleInput = sampleText.trim().length > 0
@@ -1173,6 +1502,102 @@ export default function TemplateBuilder() {
     }
   }, [deleteTemplate])
 
+  const importTemplateLibrary = useCallback(async (libraryImport: TemplateLibraryImport) => {
+    setIsImportingTemplates(true)
+
+    try {
+      await Promise.all([
+        fetchSavedTemplates(),
+        fetchTemplateDirectories()
+      ])
+
+      const initialState = useStore.getState()
+      const existingVendors = new Set(initialState.vendors.map((vendor) => vendor.name))
+
+      for (const vendor of libraryImport.vendors) {
+        if (!existingVendors.has(vendor)) {
+          try {
+            await createVendorRequest(vendor)
+            existingVendors.add(vendor)
+          } catch {
+            existingVendors.add(vendor)
+          }
+        }
+      }
+
+      await fetchTemplateDirectories()
+
+      const categoryByKey = indexCategories(useStore.getState().parseCategories)
+      const categoriesToEnsure = Array.from(
+        new Map(
+          libraryImport.categories
+            .flatMap((category) => category.path.map((_, index) => ({
+              vendor: category.vendor,
+              path: category.path.slice(0, index + 1)
+            })))
+            .map((category) => [getCategoryKey(category.vendor, category.path), category])
+        ).values()
+      ).sort((a, b) => a.path.length - b.path.length)
+
+      for (const category of categoriesToEnsure) {
+        let parentId: string | null = null
+
+        for (let index = 0; index < category.path.length; index += 1) {
+          const currentPath = category.path.slice(0, index + 1)
+          const key = getCategoryKey(category.vendor, currentPath)
+          const existing = categoryByKey.get(key)
+
+          if (existing) {
+            parentId = existing.id
+            continue
+          }
+
+          try {
+            const created = await createCategoryRequest('parse', {
+              vendor: category.vendor,
+              name: currentPath[currentPath.length - 1],
+              parentId
+            })
+            categoryByKey.set(key, created)
+            parentId = created.id
+          } catch {
+            await fetchTemplateDirectories()
+            const refreshedCategories = indexCategories(useStore.getState().parseCategories)
+            categoryByKey.clear()
+            refreshedCategories.forEach((value, refreshedKey) => categoryByKey.set(refreshedKey, value))
+            parentId = categoryByKey.get(key)?.id ?? parentId
+          }
+        }
+      }
+
+      await fetchSavedTemplates()
+
+      const existingTemplatesById = new Map(useStore.getState().savedTemplates.map((template) => [template.id, template]))
+      let createdCount = 0
+      let updatedCount = 0
+
+      for (const template of libraryImport.templates) {
+        if (template.id && existingTemplatesById.has(template.id)) {
+          await updateTemplateRequest(template.id, template.payload)
+          updatedCount += 1
+          continue
+        }
+
+        await createTemplateRequest(template.payload)
+        createdCount += 1
+      }
+
+      await Promise.all([
+        fetchSavedTemplates(),
+        fetchTemplateDirectories()
+      ])
+
+      alert(`导入完成：新增 ${createdCount} 个，更新 ${updatedCount} 个。`)
+    } finally {
+      setIsImportingTemplates(false)
+    }
+  }, [fetchSavedTemplates, fetchTemplateDirectories])
+
   const handleTemplateUpload = useCallback(async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -1183,6 +1608,16 @@ export default function TemplateBuilder() {
 
     const content = await file.text()
     const uploadedTemplateName = file.name.replace(/\.[^/.]+$/, '').trim()
+    const libraryImport = parseTemplateLibraryImport(content)
+
+    if (libraryImport) {
+      try {
+        await importTemplateLibrary(libraryImport)
+      } catch (error) {
+        alert(error instanceof Error ? error.message : '导入模板库失败')
+      }
+      return
+    }
 
     useStore.setState({
       sampleText: '',
@@ -1192,40 +1627,95 @@ export default function TemplateBuilder() {
       templateName: uploadedTemplateName || 'Imported Template',
       selectedSavedTemplateId: null
     })
-  }, [])
+  }, [importTemplateLibrary])
 
-  const handleDownloadTemplate = useCallback(() => {
-    if (!generatedTemplate.trim()) {
-      return
+  const handleDownloadTemplate = useCallback(async () => {
+    setIsExportingTemplates(true)
+
+    try {
+      await Promise.all([
+        fetchSavedTemplates(),
+        fetchTemplateDirectories()
+      ])
+
+      const {
+        savedTemplates: latestTemplates,
+        vendors: latestVendors,
+        parseCategories: latestCategories
+      } = useStore.getState()
+
+      if (latestTemplates.length === 0) {
+        alert('暂无可导出的模板')
+        return
+      }
+
+      const payload = {
+        schemaVersion: 1,
+        exportedAt: new Date().toISOString(),
+        templateCount: latestTemplates.length,
+        vendorCount: latestVendors.length,
+        categoryCount: latestCategories.length,
+        vendors: latestVendors,
+        categories: latestCategories,
+        templates: latestTemplates.map((template) => ({
+          id: template.id,
+          name: template.name,
+          description: template.description,
+          vendor: template.vendor || 'Unassigned',
+          categoryPath: template.categoryPath || [],
+          sampleText: template.sampleText,
+          variables: template.variables,
+          groups: template.groups || [],
+          generatedTemplate: template.generatedTemplate,
+          createdAt: template.createdAt,
+          updatedAt: template.updatedAt
+        }))
+      }
+      const exportedDate = new Date().toISOString().slice(0, 10)
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json;charset=utf-8' })
+
+      saveAs(blob, `ip-ttp-templates-${exportedDate}.json`)
+    } catch (error) {
+      alert(error instanceof Error ? error.message : '导出模板失败')
+    } finally {
+      setIsExportingTemplates(false)
     }
-
-    const blob = new Blob([generatedTemplate], { type: 'text/plain;charset=utf-8' })
-    saveAs(blob, getTemplateDownloadName(templateName))
-  }, [generatedTemplate, templateName])
+  }, [fetchSavedTemplates, fetchTemplateDirectories])
 
   return (
-    <div className="flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
+    <div className="template-builder-page flex flex-col h-full" style={{ backgroundColor: 'var(--bg-primary)' }}>
       {/* Header */}
       <div className="page-header">
-        <h2>Template Builder</h2>
+        <h2>模板构建</h2>
         <div className="flex gap-2">
-          <label className="btn cursor-pointer">
-            Upload Template
-            <input type="file" accept=".txt,.ttp,.xml" className="hidden" onChange={handleTemplateUpload} />
+          <label
+            className="btn cursor-pointer"
+            title="上传模板库 JSON，或上传单个 .ttp/.txt/.xml 模板"
+            style={isImportingTemplates ? { pointerEvents: 'none', opacity: 0.65 } : undefined}
+          >
+            {isImportingTemplates ? '导入中...' : '上传模板'}
+            <input
+              type="file"
+              accept=".json,.txt,.ttp,.xml,application/json,text/plain"
+              className="hidden"
+              onChange={handleTemplateUpload}
+              disabled={isImportingTemplates}
+            />
           </label>
           <button
             onClick={newTemplate}
             className="btn"
             disabled={!sampleText && !generatedTemplate && variables.length === 0 && groups.length === 0 && !templateName && !selectedSavedTemplateId}
           >
-            New
+            新建
           </button>
           <button
-            onClick={handleDownloadTemplate}
+            onClick={() => { void handleDownloadTemplate() }}
             className="btn"
-            disabled={!generatedTemplate.trim()}
+            disabled={isExportingTemplates || isLoadingTemplates}
+            title="导出全部模板，并保留厂商和文件夹信息"
           >
-            Download Template
+            {isExportingTemplates ? '导出中...' : '下载模板'}
           </button>
         </div>
       </div>
@@ -1233,14 +1723,14 @@ export default function TemplateBuilder() {
       {/* Main content area - 4 panels */}
       <div className="flex-1 flex min-h-0">
         {/* Left: Saved Templates Sidebar */}
-        <div className="w-56 border-r overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
+        <div className="template-library-sidebar border-r flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
           <TemplateDirectoryTree
-            title="Template Management"
+            title="模板库"
             vendors={vendors}
             categories={parseCategories}
             templates={savedTemplates}
             loading={isLoadingTemplates || isLoadingTemplateDirectories}
-            emptyText="No saved templates"
+            emptyText="暂无保存模板"
             activeTemplateId={selectedSavedTemplateId}
             manageDirectories
             onTemplateClick={(templateId) => { void handleLoadTemplate(templateId) }}
@@ -1258,12 +1748,11 @@ export default function TemplateBuilder() {
         {/* Center: Sample Input + Generated Template (side by side) */}
         <div className="flex-1 flex min-w-0">
           {/* Sample Input Editor (Left) */}
-          <div className="flex-1 relative border-r" style={{ borderColor: 'var(--border-color)' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center justify-between gap-3" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
-              <div className="flex items-center gap-2 min-w-0">
-                <span style={{ color: 'var(--text-secondary)' }}>Sample Input</span>
-                <span style={{ color: 'var(--text-muted)' }}>Right-click selection to</span>
-                <span style={{ color: 'var(--text-primary)' }}>Add Variable or Group</span>
+          <div className="template-editor-panel border-r" style={{ borderColor: 'var(--border-color)' }}>
+            <div className="template-editor-header gap-3" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
+              <div className="sample-editor-title-row">
+                <span className="sample-editor-title-main">样本输入</span>
+                <span className="sample-editor-title-hint">右键选择文本 → 添加变量 / 组</span>
               </div>
               <button
                 type="button"
@@ -1271,12 +1760,12 @@ export default function TemplateBuilder() {
                 disabled={isSavingTemplate || !sampleText.trim()}
                 className="btn px-2 py-1 text-xs"
                 style={{ fontSize: '12px', padding: '2px 8px' }}
-                title="Save Sample Input and regenerate Generated Template"
+                title="保存样本输入并重新生成模板"
               >
-                Save Sample
+                保存样本
               </button>
             </div>
-            <div className="pt-9 h-full">
+            <div className="template-editor-body">
               <Editor
                 height="100%"
                 defaultLanguage="plaintext"
@@ -1287,31 +1776,33 @@ export default function TemplateBuilder() {
                   minimap: { enabled: false },
                   lineNumbers: 'on',
                   wordWrap: 'on',
-                  fontSize: 14,
-                  fontFamily: 'var(--font-mono)',
+                  fontSize: 13,
+                  lineHeight: 20,
+                  fontFamily: EDITOR_FONT_FAMILY,
+                  padding: { top: 8 },
                   scrollBeyondLastLine: false,
-                  contextmenu: true,
+                  contextmenu: false,
                   automaticLayout: true
                 }}
               />
             </div>
             {/* Instructions overlay */}
             {sampleText === '' && (
-              <div className="absolute inset-0 flex items-center justify-center pointer-events-none pt-9">
+              <div className="template-editor-empty-overlay">
                 <div className="text-center p-8" style={{ color: 'var(--text-muted)' }}>
-                  <p className="text-lg mb-2">Enter sample text or load a file</p>
-                  <p className="text-sm">Select text, right-click to add variables or groups</p>
+                  <p className="template-builder-empty-title">输入样本内容或加载文件</p>
+                  <p className="template-builder-empty-text">选择文本后右键添加变量或组</p>
                 </div>
               </div>
             )}
           </div>
 
           {/* Generated Template Editor (Right) */}
-          <div className="flex-1 relative" style={{ minWidth: '200px' }}>
-            <div className="absolute top-0 left-0 right-0 z-10 px-3 py-2 border-b text-xs font-medium flex items-center justify-between" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)', color: 'var(--text-secondary)' }}>
-              <div className="flex items-center gap-2 min-w-0">
-                <span>Generated Template</span>
-                {templateName && <span className="truncate" style={{ color: 'var(--accent-primary)' }}>{templateName}</span>}
+          <div className="template-editor-panel" style={{ minWidth: '200px' }}>
+            <div className="template-editor-header gap-3" style={{ backgroundColor: 'var(--bg-header)', borderColor: 'var(--border-color)' }}>
+              <div className="sample-editor-title-row">
+                <span className="sample-editor-title-main">生成的模板</span>
+                {templateName && <span className="sample-editor-title-hint">{templateName}</span>}
               </div>
               <button
                 type="button"
@@ -1319,12 +1810,12 @@ export default function TemplateBuilder() {
                 disabled={isSavingTemplate || !generatedTemplate.trim()}
                 className="btn px-2 py-1 text-xs"
                 style={{ fontSize: '12px', padding: '2px 8px' }}
-                title="Save Generated Template exactly as shown"
+                title="按当前内容保存生成模板"
               >
-                Save Template
+                保存模板
               </button>
             </div>
-            <div className="pt-9 h-full">
+            <div className="template-editor-body">
               <Editor
                 height="100%"
                 defaultLanguage="xml"
@@ -1335,8 +1826,10 @@ export default function TemplateBuilder() {
                   minimap: { enabled: false },
                   lineNumbers: 'on',
                   wordWrap: 'on',
-                  fontSize: 14,
-                  fontFamily: 'var(--font-mono)',
+                  fontSize: 13,
+                  lineHeight: 20,
+                  fontFamily: EDITOR_FONT_FAMILY,
+                  padding: { top: 8 },
                   scrollBeyondLastLine: false,
                   automaticLayout: true
                 }}
@@ -1346,17 +1839,29 @@ export default function TemplateBuilder() {
         </div>
 
         {/* Right: Variable list sidebar */}
-        <div className="w-56 border-l overflow-auto flex-shrink-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
+        <div className="template-builder-entity-sidebar">
           <VariableList
             variables={variables}
             groups={groups}
             onEditVariable={handleEditVariable}
+            onEditGroup={handleEditGroup}
             onRemoveVariable={removeVariable}
             onRemoveGroup={removeGroup}
             onReorderVariable={reorderVariables}
           />
         </div>
       </div>
+
+      {sampleContextMenu && (
+        <ContextMenu
+          x={sampleContextMenu.x}
+          y={sampleContextMenu.y}
+          selectedText={sampleContextMenu.text}
+          onAddVariable={handleSampleContextAddVariable}
+          onAddGroup={handleSampleContextAddGroup}
+          onClose={() => setSampleContextMenu(null)}
+        />
+      )}
 
       {/* Variable Modal */}
       {showModal && (currentSelection || editingVariable) && (
@@ -1376,31 +1881,30 @@ export default function TemplateBuilder() {
           selectedText={groupSelection.text}
           startLine={groupSelection.startLine}
           endLine={groupSelection.endLine}
+          mode={editingGroup ? 'edit' : 'create'}
+          initialName={editingGroup?.name}
           onConfirm={handleGroupCreated}
-          onCancel={() => {
-            setShowGroupModal(false)
-            setGroupSelection(null)
-          }}
+          onCancel={handleGroupModalClose}
         />
       )}
 
       {/* Template Name Modal */}
       {showTemplateNameModal && (
         <div className="fixed inset-0 flex items-center justify-center z-50" style={{ backgroundColor: 'var(--overlay-backdrop)' }} onClick={(e) => { if (e.target === e.currentTarget) setShowTemplateNameModal(false) }}>
-          <div className="rounded-lg p-6 w-96 shadow-xl" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-            <h3 className="text-lg font-semibold mb-1" style={{ color: 'var(--text-primary)' }}>Save {templateSaveSourceLabel}</h3>
-            <p className="text-xs mb-4" style={{ color: 'var(--text-muted)' }}>
+          <div className="template-save-modal" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+            <h3 style={{ color: 'var(--text-primary)' }}>保存{templateSaveSourceLabel}</h3>
+            <p className="template-save-modal-subtitle" style={{ color: 'var(--text-muted)' }}>
               {templateSaveSource === 'sample'
-                ? 'Sample Input has priority and will regenerate the stored template.'
-                : 'Generated Template has priority and will be stored exactly as shown.'}
+                ? '样本输入优先，将重新生成并存储模板。'
+                : '生成模板将按当前内容原样存储。'}
             </p>
             <div className="mb-3">
-              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Name</div>
+              <div className="template-save-modal-label" style={{ color: 'var(--text-muted)' }}>模板名称</div>
               <input
                 type="text"
                 value={templateNameInput}
                 onChange={(e) => setTemplateNameInput(e.target.value)}
-                placeholder="e.g., interfaces"
+                placeholder="例如 interfaces"
                 className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
                 style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 autoFocus
@@ -1408,7 +1912,7 @@ export default function TemplateBuilder() {
             </div>
             {/* Vendor selector */}
             <div className="mb-3">
-              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Vendor</div>
+              <div className="template-save-modal-label" style={{ color: 'var(--text-muted)' }}>厂商</div>
               {!isNewVendor ? (
                 <select
                   value={templateVendorInput}
@@ -1429,11 +1933,11 @@ export default function TemplateBuilder() {
                   className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
                   style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                 >
-                  <option value="Unassigned">Unassigned</option>
+                  <option value="Unassigned">未分类厂商</option>
                   {vendors.map((vendor) => (
                     <option key={vendor.name} value={vendor.name}>{vendor.name}</option>
                   ))}
-                  <option value="__new__">+ New vendor...</option>
+                  <option value="__new__">+ 新建厂商...</option>
                 </select>
               ) : (
                 <div className="flex gap-2">
@@ -1441,7 +1945,7 @@ export default function TemplateBuilder() {
                     type="text"
                     value={newVendorInput}
                     onChange={(e) => setNewVendorInput(e.target.value)}
-                    placeholder="New vendor name"
+                    placeholder="新厂商名称"
                     className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
                     style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                     autoFocus
@@ -1450,13 +1954,13 @@ export default function TemplateBuilder() {
                     onClick={() => { setIsNewVendor(false); setTemplateVendorInput(templateVendorInput) }}
                     className="btn"
                     type="button"
-                  >Cancel</button>
+                  >取消</button>
                 </div>
               )}
             </div>
             {/* Folder path selector */}
             <div className="mb-4">
-              <div className="text-xs mb-1" style={{ color: 'var(--text-muted)' }}>Folder</div>
+              <div className="template-save-modal-label" style={{ color: 'var(--text-muted)' }}>分类路径</div>
               {(() => {
                 const activeVendor = isNewVendor ? newVendorInput.trim() : templateVendorInput
                 const vendorCategories = parseCategories.filter((cat) => cat.vendor === activeVendor)
@@ -1474,11 +1978,11 @@ export default function TemplateBuilder() {
                     className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
                     style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                   >
-                    <option value="">No folder (top level)</option>
+                    <option value="">无分类（顶层）</option>
                     {vendorCategories.map((cat) => (
                       <option key={cat.id} value={cat.path.join('/')}>{cat.path.join('/')}</option>
                     ))}
-                    <option value="__new__">+ New folder path...</option>
+                    <option value="__new__">+ 新建分类路径...</option>
                   </select>
                 ) : (
                   <div className="flex gap-2">
@@ -1486,7 +1990,7 @@ export default function TemplateBuilder() {
                       type="text"
                       value={newCategoryInput}
                       onChange={(e) => setNewCategoryInput(e.target.value)}
-                      placeholder="e.g. BGP/Policy"
+                      placeholder="例如 BGP/Policy"
                       className="flex-1 px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
                       style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
                       autoFocus
@@ -1495,7 +1999,7 @@ export default function TemplateBuilder() {
                       onClick={() => { setIsNewCategory(false); setTemplateCategoryInput('') }}
                       className="btn"
                       type="button"
-                    >Cancel</button>
+                    >取消</button>
                   </div>
                 )
               })()}
@@ -1505,14 +2009,14 @@ export default function TemplateBuilder() {
                 onClick={() => setShowTemplateNameModal(false)}
                 className="btn"
               >
-                Cancel
+                取消
               </button>
               <button
                 onClick={() => { void handleTemplateNameSubmit() }}
                 className="btn"
                 disabled={isSavingTemplate}
               >
-                {isSavingTemplate ? 'Saving...' : 'Save'}
+                {isSavingTemplate ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

@@ -189,6 +189,7 @@ interface AppState {
   syncVariableRanges: (updates: VariableRangeSyncUpdate[]) => void
   addGroup: (group: Omit<Group, 'id' | 'colorIndex'>) => void
   removeGroup: (id: string) => void
+  updateGroup: (id: string, updates: Partial<Omit<Group, 'id'>>) => void
   syncGroupRanges: (updates: GroupRangeSyncUpdate[]) => void
   setTemplateName: (name: string) => void
   generateTemplate: () => string
@@ -542,6 +543,14 @@ export const useStore = create<AppState>()(
       removeGroup: (id) => {
         set((state) => ({
           groups: state.groups.filter((g) => g.id !== id)
+        }))
+      },
+
+      updateGroup: (id, updates) => {
+        set((state) => ({
+          groups: state.groups.map((group) =>
+            group.id === id ? { ...group, ...updates } : group
+          )
         }))
       },
 
@@ -1183,6 +1192,9 @@ export const useStore = create<AppState>()(
   )
 )
 
-export const getVariableColor = (index: number): string => {
-  return VARIABLE_COLORS[index % VARIABLE_COLORS.length]
+export const getVariableColor = (index?: number): string => {
+  const normalizedIndex = typeof index === 'number' && Number.isInteger(index)
+    ? index
+    : 0
+  return VARIABLE_COLORS[((normalizedIndex % VARIABLE_COLORS.length) + VARIABLE_COLORS.length) % VARIABLE_COLORS.length]
 }

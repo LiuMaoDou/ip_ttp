@@ -106,6 +106,68 @@ function getLeafFileName(path: string): string {
   return normalizedPath.split('/').pop() || normalizedPath
 }
 
+function getResultFieldValue(value: unknown, fieldNames: string[], depth = 0): string | null {
+  if (depth > 5 || value == null) {
+    return null
+  }
+
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = getResultFieldValue(item, fieldNames, depth + 1)
+      if (found) {
+        return found
+      }
+    }
+    return null
+  }
+
+  if (typeof value !== 'object') {
+    return null
+  }
+
+  const record = value as Record<string, unknown>
+  const normalizedFields = fieldNames.map((fieldName) => fieldName.toLowerCase())
+
+  for (const [key, fieldValue] of Object.entries(record)) {
+    const normalizedKey = key.toLowerCase().replace(/[\s-]+/g, '_')
+    if (normalizedFields.includes(normalizedKey) && typeof fieldValue === 'string' && fieldValue.trim()) {
+      return fieldValue.trim()
+    }
+  }
+
+  for (const fieldValue of Object.values(record)) {
+    const found = getResultFieldValue(fieldValue, fieldNames, depth + 1)
+    if (found) {
+      return found
+    }
+  }
+
+  return null
+}
+
+function getDeviceNameFromInput(input: string): string | null {
+  const hostnameMatch = input.match(/^\s*hostname\s+(\S+)/im)
+  if (hostnameMatch?.[1]) {
+    return hostnameMatch[1].trim()
+  }
+
+  const promptMatch = input.match(/^\s*([A-Za-z0-9][\w.-]{1,63})[>#]\s*$/m)
+  return promptMatch?.[1]?.trim() || null
+}
+
+function getQuickParseDisplayName(result: ParseResult, input: string): string {
+  const deviceName = getResultFieldValue(result.result, [
+    'hostname',
+    'host_name',
+    'device_name',
+    'device',
+    'name',
+    'sysname'
+  ])
+
+  return deviceName || getDeviceNameFromInput(input) || '手动输入'
+}
+
 function UploadedFileIcon() {
   return (
     <svg className="h-4 w-4 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -240,22 +302,37 @@ function getActiveProgressPercent(job: BatchParseJob | null, isSubmittingBatch: 
 function getStatusTone(status?: BatchParseJob['status']): { label: string; color: string; bg: string } {
   switch (status) {
     case 'completed':
-      return { label: 'Completed', color: '#15803d', bg: 'rgba(34, 197, 94, 0.12)' }
+      return { label: '已完成', color: '#15803d', bg: 'rgba(34, 197, 94, 0.12)' }
     case 'failed':
-      return { label: 'Failed', color: '#b91c1c', bg: 'rgba(239, 68, 68, 0.12)' }
+      return { label: '失败', color: '#b91c1c', bg: 'rgba(239, 68, 68, 0.12)' }
     case 'cancelled':
-      return { label: 'Cancelled', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.16)' }
+      return { label: '已取消', color: '#6b7280', bg: 'rgba(107, 114, 128, 0.16)' }
     case 'cancel_requested':
-      return { label: 'Stopping', color: '#b45309', bg: 'rgba(245, 158, 11, 0.16)' }
+      return { label: '停止中', color: '#b45309', bg: 'rgba(245, 158, 11, 0.16)' }
     case 'parsing':
-      return { label: 'Parsing', color: '#1d4ed8', bg: 'rgba(59, 130, 246, 0.12)' }
+      return { label: '解析中', color: '#1d4ed8', bg: 'rgba(59, 130, 246, 0.12)' }
     case 'scanning':
-      return { label: 'Scanning', color: '#7c3aed', bg: 'rgba(124, 58, 237, 0.12)' }
+      return { label: '扫描中', color: '#7c3aed', bg: 'rgba(124, 58, 237, 0.12)' }
     case 'queued':
-      return { label: 'Queued', color: '#92400e', bg: 'rgba(245, 158, 11, 0.12)' }
+      return { label: '排队中', color: '#92400e', bg: 'rgba(245, 158, 11, 0.12)' }
     default:
-      return { label: 'Idle', color: '#475569', bg: 'rgba(148, 163, 184, 0.12)' }
+      return { label: '空闲', color: '#475569', bg: 'rgba(148, 163, 184, 0.12)' }
   }
+}
+
+function formatBatchPhaseMessage(message: string): string {
+  const phaseMessages: Record<string, string> = {
+    'Waiting for background worker': '等待后台任务',
+    'Batch job state loaded': '批量任务状态已加载',
+    'Stopping batch job': '正在停止批量任务',
+    'Batch parse cancelled': '批量解析已取消',
+    'Scanning uploads': '正在扫描上传文件',
+    'Parsing files': '正在解析文件',
+    'Batch parse completed': '批量解析已完成',
+    'Batch parse failed': '批量解析失败'
+  }
+
+  return phaseMessages[message] || message
 }
 
 function ResultStatePill({ success }: { success: boolean }) {
@@ -274,8 +351,57 @@ function ResultStatePill({ success }: { success: boolean }) {
         <svg className="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
         </svg>
-      ) : 'Failed'}
+      ) : '失败'}
     </span>
+  )
+}
+
+function JsonCodeBlock({ value }: { value: unknown }) {
+  const jsonText = JSON.stringify(value, null, 2)
+  const tokenPattern = /("(?:\\.|[^"\\])*"(?=\s*:))|("(?:\\.|[^"\\])*")|\b(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(true|false|null)\b/g
+
+  return (
+    <pre className="code-block test-results-json-code">
+      {jsonText.split('\n').map((line, lineIndex) => {
+        const nodes: Array<string | JSX.Element> = []
+        let lastIndex = 0
+
+        line.replace(tokenPattern, (match, key, stringValue, numberValue, keywordValue, offset) => {
+          if (offset > lastIndex) {
+            nodes.push(line.slice(lastIndex, offset))
+          }
+
+          const className = key
+            ? 'json-token-key'
+            : stringValue
+              ? 'json-token-string'
+              : numberValue
+                ? 'json-token-number'
+                : keywordValue
+                  ? 'json-token-keyword'
+                  : ''
+
+          nodes.push(
+            <span key={`${lineIndex}-${offset}`} className={className}>
+              {match}
+            </span>
+          )
+          lastIndex = offset + match.length
+          return match
+        })
+
+        if (lastIndex < line.length) {
+          nodes.push(line.slice(lastIndex))
+        }
+
+        return (
+          <span key={lineIndex} className="test-results-json-line">
+            {nodes}
+            {lineIndex < jsonText.split('\n').length - 1 ? '\n' : null}
+          </span>
+        )
+      })}
+    </pre>
   )
 }
 
@@ -366,11 +492,11 @@ export default function TestResults() {
 
     return {
       id: 'current-template',
-      name: templateName || 'Current Template',
+      name: templateName || '当前模板',
       template: generatedTemplate,
-      vendor: 'Unassigned',
+      vendor: '未分配',
       categoryPath: [],
-      description: 'Unsaved template from Template Builder',
+      description: '模板构建中的未保存模板',
       source: 'current',
       variableNames: extractOrderedVariableNames(variables)
     }
@@ -432,7 +558,7 @@ export default function TestResults() {
       setBatchError(null)
     } catch (error) {
       setStoredJobId(null)
-      setBatchError(error instanceof Error ? error.message : 'Failed to restore previous batch job')
+      setBatchError(error instanceof Error ? error.message : '恢复上一次批量任务失败')
     }
   }, [])
 
@@ -460,7 +586,7 @@ export default function TestResults() {
             setBatchResultsOffset(0)
           }
         } catch (error) {
-          setBatchError(error instanceof Error ? error.message : 'Failed to refresh batch job')
+          setBatchError(error instanceof Error ? error.message : '刷新批量任务失败')
         }
       })()
     }, 2000)
@@ -524,7 +650,7 @@ export default function TestResults() {
 
     if (selectedUpload.isArchive) {
       setUploadPreviewContent('')
-      setUploadPreviewError('Zip archives are processed on the server. Preview is unavailable before submission.')
+      setUploadPreviewError('Zip 压缩包会在服务端处理，提交前无法预览。')
       setIsLoadingUploadPreview(false)
       return
     }
@@ -588,12 +714,12 @@ export default function TestResults() {
 
   const handleStartBatch = async () => {
     if (batchTemplates.length === 0) {
-      setBatchError('Please select at least one template.')
+      setBatchError('请至少选择一个模板。')
       return
     }
 
     if (uploads.length === 0) {
-      setBatchError('Please upload at least one file or zip archive.')
+      setBatchError('请至少上传一个文件或 zip 压缩包。')
       return
     }
 
@@ -618,7 +744,7 @@ export default function TestResults() {
       setBatchJob(job)
       setStoredJobId(job.id)
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : 'Failed to start batch parse job')
+      setBatchError(error instanceof Error ? error.message : '启动批量解析任务失败')
     } finally {
       setIsSubmittingBatch(false)
       setUploadProgressPercent(0)
@@ -637,7 +763,7 @@ export default function TestResults() {
       setActiveResultSource('batch')
       setBatchError(null)
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : 'Failed to load batch results')
+      setBatchError(error instanceof Error ? error.message : '加载批量解析结果失败')
     }
   }
 
@@ -653,7 +779,7 @@ export default function TestResults() {
       const job = await cancelBatchParseJob(batchJob.id)
       setBatchJob(job)
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : 'Failed to stop batch parse job')
+      setBatchError(error instanceof Error ? error.message : '停止批量解析任务失败')
     } finally {
       setIsCancellingBatch(false)
     }
@@ -661,12 +787,12 @@ export default function TestResults() {
 
   const handleQuickParse = async () => {
     if (batchTemplates.length === 0) {
-      setBatchError('Please select at least one template.')
+      setBatchError('请至少选择一个模板。')
       return
     }
 
     if (!inputText.trim()) {
-      setBatchError('Please enter text for quick parsing.')
+      setBatchError('请输入用于快速解析的文本。')
       return
     }
 
@@ -688,7 +814,7 @@ export default function TestResults() {
       setExcludedResultKeys(new Set())
       setActiveResultSource('quick')
     } catch (error) {
-      setBatchError(error instanceof Error ? error.message : 'Quick parse failed')
+      setBatchError(error instanceof Error ? error.message : '快速解析失败')
     } finally {
       setIsQuickParsing(false)
     }
@@ -715,30 +841,30 @@ export default function TestResults() {
           ? { color: '#7c3aed', bg: 'rgba(124, 58, 237, 0.16)' }
           : { color: '#1d4ed8', bg: 'rgba(59, 130, 246, 0.16)' }
   const progressTitle = isSubmittingBatch
-    ? `Uploading files to backend · ${uploadProgressPercent}%`
+    ? `上传文件到后端 · ${uploadProgressPercent}%`
     : batchJob
-      ? `${statusTone.label} · ${batchJob.phaseMessage}`
-      : 'Idle'
+      ? `${statusTone.label} · ${formatBatchPhaseMessage(batchJob.phaseMessage)}`
+      : '空闲'
   const progressDetail = isSubmittingBatch
-    ? `Preparing ${uploads.length} upload${uploads.length === 1 ? '' : 's'}`
+    ? `准备 ${uploads.length} 个上传文件`
     : batchJob && batchJob.status === 'scanning'
-      ? `${batchJob.scannedUploads}/${batchJob.totalUploads} uploads scanned${
+      ? `${batchJob.scannedUploads}/${batchJob.totalUploads} 个上传文件已扫描${
           batchJob.totalArchiveEntries > 0
-            ? ` · ${batchJob.processedArchiveEntries}/${batchJob.totalArchiveEntries} archive entries inspected`
+            ? ` · ${batchJob.processedArchiveEntries}/${batchJob.totalArchiveEntries} 个压缩包条目已检查`
             : ''
         }`
       : batchJob && batchJob.status === 'parsing'
-        ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · ${batchJob.discoveredFileCount} discovered files`
+        ? `${batchJob.completedTasks}/${batchJob.totalTasks} 个解析任务完成 · ${batchJob.discoveredFileCount} 个文件`
         : batchJob && batchJob.status === 'cancel_requested'
-          ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · waiting for in-flight work to stop`
+          ? `${batchJob.completedTasks}/${batchJob.totalTasks} 个解析任务完成 · 等待运行中的任务停止`
           : batchJob && batchJob.status === 'cancelled'
-            ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed before cancellation`
+            ? `取消前完成 ${batchJob.completedTasks}/${batchJob.totalTasks} 个解析任务`
         : batchJob && batchJob.status === 'completed'
-          ? `${batchJob.completedTasks}/${batchJob.totalTasks} parse tasks completed · ${batchJob.successCount} succeeded · ${batchJob.failureCount} failed`
+          ? `${batchJob.completedTasks}/${batchJob.totalTasks} 个解析任务完成 · ${batchJob.successCount} 成功 · ${batchJob.failureCount} 失败`
           : batchJob && batchJob.status === 'failed'
-            ? batchJob.recentError?.error ? String(batchJob.recentError.error) : 'Batch parse failed'
+            ? batchJob.recentError?.error ? String(batchJob.recentError.error) : '批量解析失败'
             : batchJob
-              ? `${batchJob.uploadCount} uploads queued`
+              ? `${batchJob.uploadCount} 个上传文件排队中`
               : ''
   const rawBatchResults = batchResultsPage?.items || batchJob?.previewResults || []
   const canGoPrev = batchResultsOffset > 0
@@ -750,7 +876,7 @@ export default function TestResults() {
       key: `quick-${item.templateId}`,
       source: 'quick' as const,
       templateName: item.templateName,
-      fileName: 'Manual Input',
+      fileName: getQuickParseDisplayName(item.result, inputText),
       success: item.result.success,
       error: item.result.error,
       errorType: item.result.errorType,
@@ -758,7 +884,7 @@ export default function TestResults() {
       csvResult: item.result.csvResult,
       checkupCsvResult: item.result.checkupCsvResult
     }))
-  ), [quickParseResults])
+  ), [inputText, quickParseResults])
 
   const batchItems = useMemo<DisplayResultItem[]>(() => (
     rawBatchResults.map((item, index) => ({
@@ -800,7 +926,6 @@ export default function TestResults() {
   }, [displayResults])
 
   const currentResult = displayResults[selectedResultIndex] || displayResults[0] || null
-  const successCount = displayResults.filter((item) => item.success).length
   const failedCount = displayResults.filter((item) => !item.success).length
   const hasDownloads = Boolean(
     batchJob?.artifactUrls.summary
@@ -843,86 +968,86 @@ export default function TestResults() {
   }
 
   return (
-    <div className="flex flex-col h-full text-sm relative" style={{ backgroundColor: 'var(--bg-primary)', fontSize: '14px' }}>
-      <div className="page-header">
-        <div className="flex items-center gap-3 min-w-0">
-          <h2>Test & Results</h2>
+    <div className="test-results-page page-root relative">
+      <div className="page-toolbar">
+        <div className="page-toolbar-left">
+          <h2 className="page-title">测试 & 结果</h2>
           <div
-            className="h-5 border-l border-dashed"
+            className="toolbar-sep"
             style={{ borderColor: 'var(--border-color)' }}
           />
           <button
             onClick={() => setShowTemplateSelector(true)}
             className="btn"
           >
-            Templates
+            模板
           </button>
-          <span className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
-            {selectedTemplateIds.length}/{(currentTemplateOption ? 1 : 0) + savedTemplateOptions.length} selected
+          <span className="muted truncate">
+            {selectedTemplateIds.length}/{(currentTemplateOption ? 1 : 0) + savedTemplateOptions.length} 已选
           </span>
         </div>
-        <div className="flex gap-2 items-center">
+        <div className="page-toolbar-actions">
           <button
             onClick={handleQuickParse}
             disabled={isQuickParsing || batchTemplates.length === 0}
             className="btn"
           >
-            {isQuickParsing ? 'Parsing...' : 'Quick Parse'}
+            {isQuickParsing ? '解析中...' : '快速解析'}
           </button>
           <button
             onClick={handleStartBatch}
             disabled={isSubmittingBatch || uploads.length === 0 || batchTemplates.length === 0}
             className="btn"
           >
-            {isSubmittingBatch ? 'Submitting...' : 'Batch Parse'}
+            {isSubmittingBatch ? '提交中...' : '批量解析'}
           </button>
           <button
             onClick={handleCancelBatch}
             disabled={!canCancelBatch || isCancellingBatch}
             className="btn"
           >
-            {isCancellingBatch || batchJob?.status === 'cancel_requested' ? 'Stopping...' : 'Stop Batch'}
+            {isCancellingBatch || batchJob?.status === 'cancel_requested' ? '停止中...' : '停止'}
           </button>
           <button
             onClick={handleSendToConfigGen}
             disabled={displayResults.filter((item) => item.success && item.result !== undefined).length === 0}
             className="btn"
           >
-            → Config Gen
+            → 配置生成
           </button>
           {hasDownloads && (
             <div className="relative">
-              <button
-                onClick={() => setShowDownloadMenu((current) => !current)}
-                className="btn flex items-center gap-1"
-              >
-                Download
+                <button
+                  onClick={() => setShowDownloadMenu((current) => !current)}
+                  className="btn flex items-center gap-1"
+                  aria-label="Download results 下载结果"
+                >
+                  下载结果
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
               </button>
               {showDownloadMenu && (
                 <div
-                  className="absolute right-0 mt-2 min-w-44 rounded-md border shadow-lg z-20 overflow-hidden"
-                  style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+                  className="download-menu"
                 >
                   {batchJob?.artifactUrls.summary && (
-                    <a href={batchJob.artifactUrls.summary} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
-                      Summary
+                    <a href={batchJob.artifactUrls.summary}>
+                      摘要
                     </a>
                   )}
                   {batchJob?.artifactUrls.results && (
-                    <a href={batchJob.artifactUrls.results} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
-                      Results JSONL
+                    <a href={batchJob.artifactUrls.results}>
+                      结果 JSONL
                     </a>
                   )}
                   {batchJob?.artifactUrls.errors && (
-                    <a href={batchJob.artifactUrls.errors} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
-                      Errors JSONL
+                    <a href={batchJob.artifactUrls.errors}>
+                      错误 JSONL
                     </a>
                   )}
                   {batchJob?.artifactUrls.excel && (
-                    <a href={batchJob.artifactUrls.excel} className="block px-3 py-2 text-sm" style={{ color: 'var(--text-primary)' }}>
+                    <a href={batchJob.artifactUrls.excel}>
                       Excel
                     </a>
                   )}
@@ -935,42 +1060,40 @@ export default function TestResults() {
 
       {showProgressStrip && (
         <div
-          className="px-4 py-3 border-b"
-          style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+          className="progress-card"
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="progress-head">
             <span
-              className="text-sm px-2 py-1 rounded whitespace-nowrap"
+              className="ui-tag"
               style={{ backgroundColor: progressTone.bg, color: progressTone.color }}
             >
-              {isSubmittingBatch ? 'Uploading' : statusTone.label}
+              {isSubmittingBatch ? '上传中' : statusTone.label}
             </span>
             <div className="flex items-center gap-3 min-w-0 flex-1">
-              <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>
+              <strong className="truncate" style={{ color: 'var(--text-primary)' }}>
                 {progressTitle}
-              </p>
+              </strong>
               {progressDetail && (
                 <>
                   <div
                     className="h-4 border-l border-dashed flex-shrink-0"
                     style={{ borderColor: 'var(--border-color)' }}
                   />
-                  <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>
+                  <span className="truncate">
                     {progressDetail}
-                  </p>
+                  </span>
                 </>
               )}
             </div>
-            <span className="text-sm whitespace-nowrap ml-auto" style={{ color: 'var(--text-muted)' }}>
+            <code className="whitespace-nowrap ml-auto">
               {activeProgressPercent}%
-            </span>
+            </code>
           </div>
           <div
-            className="mt-2 h-2 rounded-full overflow-hidden"
-            style={{ backgroundColor: 'var(--bg-tertiary)' }}
+            className="progress-track"
           >
             <div
-              className="h-full rounded-full transition-all"
+              className="progress-fill"
               style={{
                 width: `${activeProgressPercent}%`,
                 backgroundColor: progressTone.color
@@ -981,16 +1104,30 @@ export default function TestResults() {
       )}
 
       <div
-        className="flex-1 grid min-h-0"
+        className="test-results-grid"
         style={{
-          gridTemplateColumns: '14rem minmax(0, 1fr) minmax(0, 1fr) 14rem'
+          gridTemplateColumns: '180px minmax(0, 1fr) minmax(0, 1fr) 180px'
         }}
       >
-        <div className="border-r flex flex-col min-h-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div>
+        <div className="test-results-sidebar panel-border-r">
+          <div className="panel-header panel-header-compact">
+            <div className="panel-header-copy">
+              <span>上传文件</span>
+            </div>
+            <div className="panel-header-actions">
+              <button
+                className="btn"
+                onClick={handleClearUploads}
+                disabled={uploads.length === 0}
+              >
+                清空
+              </button>
+            </div>
+          </div>
+          <div className="test-results-upload-col">
             <div
               {...getRootProps()}
-              className="px-3 py-2 mx-2 mt-2 border border-dashed rounded-lg cursor-pointer transition-colors"
+              className="drop-box test-results-drop-box"
               style={{
                 borderColor: isDragActive ? '#3b82f6' : 'var(--border-color)',
                 backgroundColor: isDragActive ? 'rgba(59, 130, 246, 0.06)' : 'transparent',
@@ -998,37 +1135,29 @@ export default function TestResults() {
               }}
             >
               <input {...getInputProps()} />
-              <p className="text-sm text-center">
-                {isDragActive ? 'Drop files or zip here' : 'Drop Files / Zip or click'}
-              </p>
+              <p>{isDragActive ? '松开以上传文件' : '拖拽文件或点击上传'}</p>
+              <small>.txt .log .cfg .conf .zip</small>
             </div>
-            <div className="flex-1 overflow-auto p-2">
-              <div className="flex items-center justify-between mb-2 px-1">
-                <h4 className="text-sm font-medium" style={{ color: 'var(--text-secondary)' }}>Files</h4>
+            <div className="test-results-upload-list">
+              <div className="test-results-list-head">
+                <span style={{ color: 'var(--text-secondary)' }}>文件</span>
                 <div className="flex items-center gap-2">
-                  <button
-                    className="btn text-xs"
-                    onClick={handleClearUploads}
-                    disabled={uploads.length === 0}
-                  >
-                    Clear
-                  </button>
                   {selectedUploadIds.length > 0 && (
-                    <span className="text-xs" style={{ color: 'var(--text-secondary)' }}>
-                      {selectedUploadIds.length} selected
+                    <span style={{ color: 'var(--text-secondary)' }}>
+                      {selectedUploadIds.length} 已选
                     </span>
                   )}
-                  <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  <span style={{ color: 'var(--text-muted)' }}>
                     {uploads.length}
                   </span>
                 </div>
               </div>
               {uploads.length === 0 ? (
-                <p className="text-sm px-1 py-4 text-center" style={{ color: 'var(--text-muted)' }}>
-                  No files
+                <p className="mini-empty">
+                  暂无文件
                 </p>
 	              ) : (
-	                <div className="space-y-0.5">
+	                <div>
                   {uploads.map((upload) => {
                     const isSelected = selectedUploadIds.includes(upload.id)
                     const isPreviewed = previewUploadId === upload.id
@@ -1037,7 +1166,7 @@ export default function TestResults() {
                       <div
                         key={upload.id}
                         onClick={() => handleSelectUploadPreview(upload.id)}
-                        className="px-2 py-1.5 rounded-md cursor-pointer group transition-colors"
+                        className="test-results-file-row group"
                         style={{
                           backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.12)' : 'transparent',
                           border: isPreviewed ? '1px solid rgba(59, 130, 246, 0.55)' : '1px solid transparent'
@@ -1054,14 +1183,14 @@ export default function TestResults() {
                               handleToggleUploadSelection(upload.id)
                             }}
                             className="mt-1 h-3.5 w-3.5 accent-blue-500"
-                            aria-label={`Select ${upload.name}`}
+                            aria-label={`选择 ${upload.name}`}
                           />
                           <span className="mt-0.5" style={{ color: upload.isArchive ? 'var(--accent-primary)' : 'var(--text-muted)' }}>
                             {upload.isArchive ? <ArchiveFileIcon /> : <UploadedFileIcon />}
                           </span>
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{upload.name}</p>
-                            <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>
+                            <p className="test-results-row-title" style={{ color: 'var(--text-primary)' }}>{upload.name}</p>
+                            <p className="test-results-row-meta" style={{ color: 'var(--text-muted)' }}>
                               {formatFileSize(upload.size)} {upload.isArchive ? '· zip' : ''}
                             </p>
                           </div>
@@ -1072,7 +1201,7 @@ export default function TestResults() {
                             }}
                             className="opacity-0 group-hover:opacity-100 transition-opacity"
                             style={{ color: 'var(--text-muted)' }}
-                            title="Remove file"
+                            title="删除文件"
                           >
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -1088,37 +1217,37 @@ export default function TestResults() {
 	          </div>
 	        </div>
 
-        <div className="border-r flex flex-col min-w-0 min-h-0" style={{ backgroundColor: 'var(--bg-primary)', borderColor: 'var(--border-color)' }}>
-          <div className="h-11 px-4 border-b flex items-center" style={{ borderColor: 'var(--border-color)' }}>
+        <div className="test-results-preview-panel panel-border-r">
+          <div className="test-results-panel-header">
             <div className="flex items-center gap-3 min-w-0 w-full">
-              <h3 className="text-sm font-medium whitespace-nowrap" style={{ color: 'var(--text-primary)' }}>Config Preview</h3>
-              <span className="text-sm truncate" style={{ color: 'var(--text-secondary)' }}>
-                {selectedUpload ? selectedUpload.name : 'Manual input'}
+              <h3 style={{ color: 'var(--text-primary)' }}>配置预览</h3>
+              <span className="truncate" style={{ color: 'var(--text-secondary)' }}>
+                {selectedUpload ? selectedUpload.name : '手动输入'}
               </span>
               {selectedUpload && (
-                <span className="text-sm whitespace-nowrap ml-auto" style={{ color: 'var(--text-muted)' }}>
+                <span className="whitespace-nowrap ml-auto" style={{ color: 'var(--text-muted)' }}>
                   {formatFileSize(selectedUpload.size)}
                 </span>
               )}
             </div>
           </div>
-          <div className="flex-1 overflow-auto p-4" style={{ backgroundColor: 'var(--surface-code)' }}>
+          <div className="test-results-code-pane">
             {selectedUpload ? (
               isLoadingUploadPreview ? (
                 <div className="h-full flex items-center justify-center text-center px-6" style={{ color: 'var(--text-muted)' }}>
-                  <p className="text-sm">Loading preview…</p>
+                  <p className="mini-empty">正在加载预览...</p>
                 </div>
               ) : uploadPreviewError ? (
                 <div className="h-full flex items-center justify-center text-center px-6" style={{ color: 'var(--text-muted)' }}>
                   <div>
-                    <p className="text-sm mb-1">{uploadPreviewError}</p>
+                    <p className="mini-empty">{uploadPreviewError}</p>
                     {selectedUpload.isArchive && (
-                      <p className="text-sm">Archive contents are expanded only after the batch starts.</p>
+                      <p className="mini-empty">压缩包内容会在批量任务开始后展开。</p>
                     )}
                   </div>
                 </div>
               ) : (
-                <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>
+                <pre className="code-block">
                   {uploadPreviewContent}
                 </pre>
               )
@@ -1126,128 +1255,128 @@ export default function TestResults() {
               <textarea
                 value={inputText}
                 onChange={(event) => setInputText(event.target.value)}
-                placeholder="Paste sample text here for quick parsing"
-                className="w-full h-full min-h-[260px] bg-transparent border-none outline-none resize-none whitespace-pre-wrap"
-                style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}
+                placeholder="粘贴样本内容用于快速解析"
+                className="preview-textarea"
               />
             )}
           </div>
         </div>
 
-        <div className="flex flex-col min-w-0 min-h-0" style={{ backgroundColor: 'var(--bg-primary)' }}>
-          <div className="h-11 px-4 border-b flex items-center gap-4 min-w-0" style={{ borderColor: 'var(--border-color)' }}>
-            <span className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>Results:</span>
+        <div className="test-results-detail-panel panel-border-r">
+          <div className="test-results-panel-header">
+            <span className="test-results-panel-title" style={{ color: 'var(--text-primary)' }}>解析结果</span>
             {displayResults.length > 0 ? (
               <>
-                {successCount > 0 && (
-                  <span className="text-sm flex items-center gap-1" style={{ color: '#22c55e' }}>
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                    </svg>
-                    {successCount} OK
-                  </span>
-                )}
                 {failedCount > 0 && (
-                  <span className="text-sm flex items-center gap-1" style={{ color: '#ef4444' }}>
+                  <span className="ui-tag ui-tag-red">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                     </svg>
-                    {failedCount} Failed
+                    {failedCount} 失败
                   </span>
                 )}
                 {batchJob && (
-                  <span className="text-sm ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
-                    {batchJob.completedTasks}/{batchJob.totalTasks} tasks · {getProgressPercent(batchJob)}%
+                  <span className="ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
+                    {batchJob.completedTasks}/{batchJob.totalTasks} 任务 · {getProgressPercent(batchJob)}%
                   </span>
                 )}
               </>
             ) : (
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>No results yet</span>
+              <span style={{ color: 'var(--text-muted)' }}>暂无结果</span>
             )}
           </div>
 
-          <div className="flex-1 overflow-auto p-4 min-w-0">
+          <div className="test-results-detail-body">
             {!displayResults.length ? (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center" style={{ color: 'var(--text-muted)' }}>
-                  <svg className="w-16 h-16 mx-auto mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <svg className="test-results-empty-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  <p className="text-sm mb-2">No results yet</p>
-                  <p className="text-sm mb-2">1. Select one or more templates</p>
-                  <p className="text-sm mb-2">2. Upload files or enter sample text</p>
-                  <p className="text-sm">3. Click "Start Batch" or "Quick Parse"</p>
+                  <p className="mini-empty">暂无结果</p>
+                  <p className="mini-empty">1. 选择一个或多个模板</p>
+                  <p className="mini-empty">2. 上传文件或输入样本文本</p>
+                  <p className="mini-empty">3. 点击“批量解析”或“快速解析”</p>
                   {selectedTemplates.length === 0 && (
-                    <p className="text-sm mt-4" style={{ color: 'var(--error)' }}>No template selected</p>
+                    <p className="mini-empty mt-4" style={{ color: 'var(--error)' }}>尚未选择模板</p>
                   )}
                 </div>
               </div>
             ) : currentResult?.success ? (
-              <div>
-                <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: 'var(--surface-success-bg)', border: '1px solid var(--surface-success-border)' }}>
+              <div className="test-results-detail-content">
+                <div className="test-results-result-status-line is-success">
                   <span
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-full"
-                    style={{ color: '#22c55e', backgroundColor: 'rgba(34, 197, 94, 0.12)' }}
-                    title={currentResult.source === 'batch' ? 'Parse successful' : 'Quick parse successful'}
-                    aria-label={currentResult.source === 'batch' ? 'Parse successful' : 'Quick parse successful'}
+                    className="test-results-result-status-icon"
+                    title={currentResult.source === 'batch' ? '解析成功' : '快速解析成功'}
+                    aria-label={currentResult.source === 'batch' ? '解析成功' : '快速解析成功'}
                   >
                     <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.2} d="M5 13l4 4L19 7" />
                     </svg>
                   </span>
-                  <span className="text-sm ml-auto mr-2 truncate" style={{ color: 'var(--text-muted)' }}>
+                  <span className="test-results-result-status-title">
+                    {currentResult.source === 'batch' ? '解析成功' : '快速解析成功'}
+                  </span>
+                  <span className="test-results-result-status-meta">
                     {currentResult.templateName} · {getLeafFileName(currentResult.fileName)}
                   </span>
                 </div>
-                <div className="rounded-lg p-4 overflow-auto" style={{ backgroundColor: 'var(--surface-code)', border: '1px solid var(--surface-code-border)' }}>
-                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>
-                    {JSON.stringify(currentResult.result, null, 2)}
-                  </pre>
+                <div className="test-results-json-view">
+                  <JsonCodeBlock value={currentResult.result} />
                 </div>
               </div>
             ) : (
-              <div>
-                <div className="mb-4 p-3 rounded-lg flex items-center gap-2" style={{ backgroundColor: 'var(--surface-error-bg)', border: '1px solid var(--surface-error-border)' }}>
-                  <svg className="w-5 h-5" style={{ color: '#ef4444' }} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                  </svg>
-                  <span className="font-medium" style={{ color: '#ef4444' }}>
-                    {currentResult?.source === 'batch' ? 'Parse failed' : 'Quick parse failed'}
-                  </span>
-                  {currentResult && (
-                    <span className="text-sm ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
-                      {currentResult.templateName} · {getLeafFileName(currentResult.fileName)}
+              <div className="test-results-detail-content">
+                <div className="test-results-error-panel">
+                  <div className="test-results-result-status-line is-error">
+                    <span className="test-results-result-status-icon">
+                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <circle cx="12" cy="12" r="10" strokeWidth={2} />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 9L9 15M9 9l6 6" />
+                      </svg>
                     </span>
-                  )}
-                </div>
-                <div className="rounded-lg p-4" style={{ backgroundColor: 'var(--surface-error-panel)', border: '1px solid var(--surface-error-panel-border)' }}>
+                    <span className="test-results-result-status-title">
+                      {currentResult?.source === 'batch' ? '解析失败' : '快速解析失败'}
+                    </span>
+                    {currentResult && (
+                      <span className="test-results-result-status-meta">
+                        {currentResult.templateName} · {getLeafFileName(currentResult.fileName)}
+                      </span>
+                    )}
+                  </div>
                   {currentResult?.errorType && (
-                    <p className="font-mono text-sm mb-2 font-semibold" style={{ color: '#ef4444' }}>{currentResult.errorType}</p>
+                    <p className="test-results-error-type">{currentResult.errorType}</p>
                   )}
-                  <pre className="whitespace-pre-wrap" style={{ fontSize: '14px', fontFamily: 'var(--font-mono)', lineHeight: '1.5', color: 'var(--text-primary)' }}>{currentResult?.error || 'Unknown error'}</pre>
+                  <pre className="code-block test-results-error-code">{currentResult?.error || '未知错误'}</pre>
                 </div>
               </div>
             )}
           </div>
         </div>
 
-        <div className="border-l overflow-auto min-h-0" style={{ backgroundColor: 'var(--bg-sidebar)', borderColor: 'var(--border-color)' }}>
-          <div className="p-2 h-full">
+        <div className="test-results-list-panel">
+          <div className="panel-header panel-header-compact">
+            <div className="panel-header-copy">
+              <span>结果列表</span>
+              <small>{displayResults.length}</small>
+            </div>
+          </div>
+          <div className="test-results-result-list">
             {displayResults.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-center px-2" style={{ color: 'var(--text-muted)' }}>
-                <p className="text-sm">No result items</p>
+              <div className="test-results-empty">
+                <p className="mini-empty">暂无结果项</p>
               </div>
             ) : (
-              <div className="space-y-0.5">
+              <div>
                 {displayResults.map((item, index) => (
                   <div
                     key={item.key}
                     onClick={() => setSelectedResultIndex(index)}
-                    className="px-2 py-1.5 rounded-md cursor-pointer transition-colors"
+                    className="test-results-result-row"
                     style={{
-                      backgroundColor: selectedResultIndex === index ? 'rgba(59, 130, 246, 0.2)' : 'transparent',
-                      border: selectedResultIndex === index ? '1px solid rgba(59, 130, 246, 0.5)' : '1px solid transparent'
+                      backgroundColor: selectedResultIndex === index ? 'var(--accent-subtle)' : 'transparent',
+                      border: selectedResultIndex === index ? '1px solid var(--accent)' : '1px solid transparent'
                     }}
                   >
                     <div className="flex items-start gap-2">
@@ -1255,20 +1384,19 @@ export default function TestResults() {
                         <ResultStatePill success={item.success} />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm truncate" style={{ color: 'var(--text-primary)' }}>{item.templateName}</p>
-                        <p className="text-sm truncate" style={{ color: 'var(--text-muted)' }}>{getLeafFileName(item.fileName)}</p>
+                        <p className="test-results-row-title">{getLeafFileName(item.fileName)}</p>
+                        <p className="test-results-row-meta">{item.templateName}</p>
                         {!item.success && item.error && (
-                          <p className="text-xs truncate mt-1" style={{ color: '#ef4444' }}>{item.error}</p>
+                          <p className="test-results-row-error">{item.error}</p>
                         )}
                       </div>
                       <button
-                        className="ml-1 opacity-40 hover:opacity-100 transition-opacity flex-shrink-0"
-                        style={{ color: 'var(--text-muted)' }}
+                        className="test-results-remove-button"
                         onClick={(e) => {
                           e.stopPropagation()
                           setExcludedResultKeys((prev) => new Set([...prev, item.key]))
                         }}
-                        title="Remove this result"
+                        title="移除此结果"
                       >
                         ×
                       </button>
@@ -1276,16 +1404,16 @@ export default function TestResults() {
                   </div>
                 ))}
                 {batchResultsPage && (
-                  <div className="flex items-center justify-between pt-3 px-1">
+                  <div className="pager">
                     <button
                       type="button"
                       onClick={() => handleLoadResultsPage(Math.max(0, batchResultsOffset - RESULTS_PAGE_SIZE))}
                       disabled={!canGoPrev}
                       className="btn"
                     >
-                      Prev
+                      上一页
                     </button>
-                    <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    <span>
                       {batchResultsOffset + 1}-{batchResultsOffset + batchResultsPage.items.length}
                     </span>
                     <button
@@ -1294,7 +1422,7 @@ export default function TestResults() {
                       disabled={!canGoNext}
                       className="btn"
                     >
-                      Next
+                      下一页
                     </button>
                   </div>
                 )}
@@ -1314,31 +1442,29 @@ export default function TestResults() {
 
         {showTemplateSelector && (
           <div
-            className="absolute inset-0 z-30 flex items-center justify-center p-6"
+            className="modal-backdrop"
             style={{ backgroundColor: 'var(--overlay-backdrop)' }}
           >
             <div
-              className="w-full max-w-3xl max-h-[85vh] overflow-auto rounded-xl border shadow-xl p-4"
-              style={{ backgroundColor: 'var(--bg-secondary)', borderColor: 'var(--border-color)' }}
+              className="template-selector-modal"
             >
-              <div className="flex items-center justify-between mb-3">
+              <div className="template-selector-header">
                 <div>
-                  <h3 className="text-base font-semibold" style={{ color: 'var(--text-primary)' }}>Template Selection</h3>
-                  <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Choose one or more templates for batch parsing.</p>
+                  <h3>模板选择</h3>
                 </div>
-                <div className="flex gap-2">
-                  <button onClick={handleSelectAllTemplates} className="btn">Toggle All</button>
-                  <button onClick={() => setShowTemplateSelector(false)} className="btn">Close</button>
+                <div className="template-selector-actions">
+                  <button onClick={handleSelectAllTemplates} className="btn">全选/反选</button>
+                  <button onClick={() => setShowTemplateSelector(false)} className="btn">关闭</button>
                 </div>
               </div>
 
               <TemplateDirectoryTree
-                title="Parse Templates"
+                title=""
                 vendors={vendors}
                 categories={parseCategories}
                 templates={currentTemplateOption ? [currentTemplateOption, ...savedTemplateOptions] : savedTemplateOptions}
                 loading={isLoadingTemplates || isLoadingTemplateDirectories}
-                emptyText="No parse templates available."
+                emptyText="暂无解析模板。"
                 selectedTemplateIds={selectedTemplateIds}
                 multiSelect
                 onTemplateToggle={(templateId) => {
@@ -1348,11 +1474,12 @@ export default function TestResults() {
                       : [...current, templateId]
                   ))
                 }}
-                renderTemplateMeta={(template) => (
-                  <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-                    {template.source === 'current' ? 'Unsaved' : template.description || 'Saved template'}
-                  </span>
-                )}
+                renderTemplateMeta={(template) => {
+                  const metaText = template.source === 'current' ? '未保存' : template.description
+                  return metaText ? (
+                    <span className="test-results-template-meta">{metaText}</span>
+                  ) : null
+                }}
               />
             </div>
           </div>
