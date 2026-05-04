@@ -19,5 +19,4 @@ test/pytest/nornir.log
 ttp/ttp_dict_cache.pickle
 frontend/node_modules/
 frontend/dist/
-backend/data/*.db
 backend/data/*.db-*
