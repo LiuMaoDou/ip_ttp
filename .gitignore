@@ -16,6 +16,7 @@ docs/Makefile
 .pytest_cache/
 test/pytest/Output/*
 test/pytest/nornir.log
+test/feature_checks/actual/
 ttp/ttp_dict_cache.pickle
 frontend/node_modules/
 frontend/dist/
