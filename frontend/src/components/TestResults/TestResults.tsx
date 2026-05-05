@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
 import TemplateDirectoryTree from '../TemplateDirectoryTree'
+import { CodeEditor } from '../../ui/CodeEditor'
 import { formatFileSize } from '../../utils'
 import { useStore, type UploadedBatchFile, type Variable } from '../../store/useStore'
 import {
@@ -143,6 +144,10 @@ function getResultFieldValue(value: unknown, fieldNames: string[], depth = 0): s
   }
 
   return null
+}
+
+function getResultHwsysname(value: unknown): string | null {
+  return getResultFieldValue(value, ['hwsysname'])
 }
 
 function getDeviceNameFromInput(input: string): string | null {
@@ -356,58 +361,216 @@ function ResultStatePill({ success }: { success: boolean }) {
   )
 }
 
-function JsonCodeBlock({ value }: { value: unknown }) {
-  const jsonText = JSON.stringify(value, null, 2)
-  const tokenPattern = /("(?:\\.|[^"\\])*"(?=\s*:))|("(?:\\.|[^"\\])*")|\b(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b|\b(true|false|null)\b/g
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function JsonPrimitive({ value }: { value: unknown }) {
+  if (typeof value === 'string') {
+    return <span className="json-token-string">{JSON.stringify(value)}</span>
+  }
+
+  if (typeof value === 'number') {
+    return <span className="json-token-number">{String(value)}</span>
+  }
+
+  if (typeof value === 'boolean' || value === null) {
+    return <span className="json-token-keyword">{String(value)}</span>
+  }
+
+  return <span className="json-token-string">{JSON.stringify(value)}</span>
+}
+
+function getJsonSummary(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `${value.length} items`
+  }
+
+  if (isJsonObject(value)) {
+    return `${Object.keys(value).length} keys`
+  }
+
+  return ''
+}
+
+interface JsonNodeProps {
+  value: unknown
+  depth: number
+  path: string
+  propertyKey?: string
+  isLast: boolean
+  collapsedPaths: Set<string>
+  onToggle: (path: string) => void
+}
+
+function JsonNode({
+  value,
+  depth,
+  path,
+  propertyKey,
+  isLast,
+  collapsedPaths,
+  onToggle
+}: JsonNodeProps) {
+  const isArray = Array.isArray(value)
+  const isObject = isJsonObject(value)
+  const isContainer = isArray || isObject
+  const entries = isArray
+    ? value.map((item, index) => ({ key: String(index), value: item }))
+    : isObject
+      ? Object.entries(value).map(([key, item]) => ({ key, value: item }))
+      : []
+  const isEmptyContainer = isContainer && entries.length === 0
+  const isCollapsed = collapsedPaths.has(path)
+  const openToken = isArray ? '[' : '{'
+  const closeToken = isArray ? ']' : '}'
+  const comma = isLast ? '' : ','
+  const lineStyle = { paddingLeft: `${depth * 16}px` }
+  const keyNode = propertyKey !== undefined ? (
+    <>
+      <span className="json-token-key">{JSON.stringify(propertyKey)}</span>
+      <span className="json-token-punctuation">: </span>
+    </>
+  ) : null
+
+  if (!isContainer) {
+    return (
+      <div className="test-results-json-line" style={lineStyle}>
+        <span className="json-collapse-spacer" />
+        {keyNode}
+        <JsonPrimitive value={value} />
+        <span className="json-token-punctuation">{comma}</span>
+      </div>
+    )
+  }
+
+  if (isEmptyContainer) {
+    return (
+      <div className="test-results-json-line" style={lineStyle}>
+        <span className="json-collapse-spacer" />
+        {keyNode}
+        <span className="json-token-punctuation">{openToken}{closeToken}{comma}</span>
+      </div>
+    )
+  }
 
   return (
-    <pre className="code-block test-results-json-code">
-      {jsonText.split('\n').map((line, lineIndex) => {
-        const nodes: Array<string | JSX.Element> = []
-        let lastIndex = 0
-
-        line.replace(tokenPattern, (match, key, stringValue, numberValue, keywordValue, offset) => {
-          if (offset > lastIndex) {
-            nodes.push(line.slice(lastIndex, offset))
-          }
-
-          const className = key
-            ? 'json-token-key'
-            : stringValue
-              ? 'json-token-string'
-              : numberValue
-                ? 'json-token-number'
-                : keywordValue
-                  ? 'json-token-keyword'
-                  : ''
-
-          nodes.push(
-            <span key={`${lineIndex}-${offset}`} className={className}>
-              {match}
-            </span>
-          )
-          lastIndex = offset + match.length
-          return match
-        })
-
-        if (lastIndex < line.length) {
-          nodes.push(line.slice(lastIndex))
-        }
-
-        return (
-          <span key={lineIndex} className="test-results-json-line">
-            {nodes}
-            {lineIndex < jsonText.split('\n').length - 1 ? '\n' : null}
-          </span>
-        )
-      })}
-    </pre>
+    <div className="test-results-json-node">
+      <div className="test-results-json-line" style={lineStyle}>
+        <button
+          type="button"
+          className="json-collapse-button"
+          onClick={() => onToggle(path)}
+          aria-label={isCollapsed ? '展开 JSON 节点' : '折叠 JSON 节点'}
+          title={isCollapsed ? '展开' : '折叠'}
+        >
+          {isCollapsed ? '▸' : '▾'}
+        </button>
+        {keyNode}
+        <span className="json-token-punctuation">{openToken}</span>
+        {isCollapsed && (
+          <>
+            <span className="json-node-summary"> {getJsonSummary(value)} </span>
+            <span className="json-token-punctuation">{closeToken}{comma}</span>
+          </>
+        )}
+      </div>
+      {!isCollapsed && (
+        <>
+          {entries.map((entry, index) => (
+            <JsonNode
+              key={`${path}.${entry.key}`}
+              value={entry.value}
+              depth={depth + 1}
+              path={`${path}.${entry.key}`}
+              propertyKey={isArray ? undefined : entry.key}
+              isLast={index === entries.length - 1}
+              collapsedPaths={collapsedPaths}
+              onToggle={onToggle}
+            />
+          ))}
+          <div className="test-results-json-line" style={lineStyle}>
+            <span className="json-collapse-spacer" />
+            <span className="json-token-punctuation">{closeToken}{comma}</span>
+          </div>
+        </>
+      )}
+    </div>
   )
+}
+
+function JsonCodeBlock({ value }: { value: unknown }) {
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    setCollapsedPaths(new Set())
+  }, [value])
+
+  const handleToggle = useCallback((path: string) => {
+    setCollapsedPaths((current) => {
+      const next = new Set(current)
+      if (next.has(path)) {
+        next.delete(path)
+      } else {
+        next.add(path)
+      }
+      return next
+    })
+  }, [])
+
+  return (
+    <div className="code-block test-results-json-code" role="tree">
+      <JsonNode
+        value={value}
+        depth={0}
+        path="$"
+        isLast
+        collapsedPaths={collapsedPaths}
+        onToggle={handleToggle}
+      />
+    </div>
+  )
+}
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.setAttribute('readonly', '')
+  textarea.style.position = 'fixed'
+  textarea.style.left = '-9999px'
+  document.body.appendChild(textarea)
+  textarea.select()
+
+  try {
+    document.execCommand('copy')
+  } finally {
+    document.body.removeChild(textarea)
+  }
+}
+
+function getCopyableResultText(result: DisplayResultItem): string {
+  if (result.success) {
+    return JSON.stringify(result.result ?? null, null, 2)
+  }
+
+  return JSON.stringify({
+    success: false,
+    templateName: result.templateName,
+    fileName: result.fileName,
+    errorType: result.errorType,
+    error: result.error || '未知错误'
+  }, null, 2)
 }
 
 export default function TestResults() {
   const {
     generatedTemplate,
+    theme,
     savedTemplates,
     isLoadingTemplates,
     isLoadingTemplateDirectories,
@@ -464,6 +627,7 @@ export default function TestResults() {
   const [isLoadingUploadPreview, setIsLoadingUploadPreview] = useState(false)
   const [uploadPreviewError, setUploadPreviewError] = useState<string | null>(null)
   const [selectedResultIndex, setSelectedResultIndex] = useState(0)
+  const [copyResultState, setCopyResultState] = useState<{ key: string; status: 'copied' | 'failed' } | null>(null)
 
   const savedTemplateOptions = useMemo<TemplateSource[]>(() => (
     savedTemplates
@@ -934,6 +1098,31 @@ export default function TestResults() {
     || batchJob?.artifactUrls.excel
   )
 
+  useEffect(() => {
+    if (!copyResultState) {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      setCopyResultState(null)
+    }, 1800)
+
+    return () => window.clearTimeout(timer)
+  }, [copyResultState])
+
+  const handleCopyCurrentResult = useCallback(async () => {
+    if (!currentResult) {
+      return
+    }
+
+    try {
+      await copyTextToClipboard(getCopyableResultText(currentResult))
+      setCopyResultState({ key: currentResult.key, status: 'copied' })
+    } catch {
+      setCopyResultState({ key: currentResult.key, status: 'failed' })
+    }
+  }, [currentResult])
+
   const handleSendToConfigGen = () => {
     const eligible = displayResults.filter((item) => item.success && item.result !== undefined)
     if (eligible.length === 0) return
@@ -1231,7 +1420,7 @@ export default function TestResults() {
               )}
             </div>
           </div>
-          <div className="test-results-code-pane">
+          <div className="test-results-code-pane is-editor-mode">
             {selectedUpload ? (
               isLoadingUploadPreview ? (
                 <div className="h-full flex items-center justify-center text-center px-6" style={{ color: 'var(--text-muted)' }}>
@@ -1247,16 +1436,22 @@ export default function TestResults() {
                   </div>
                 </div>
               ) : (
-                <pre className="code-block">
-                  {uploadPreviewContent}
-                </pre>
+                <CodeEditor
+                  value={uploadPreviewContent}
+                  language="plaintext"
+                  theme={theme}
+                  readOnly
+                  renderWhitespace="all"
+                />
               )
             ) : (
-              <textarea
+              <CodeEditor
                 value={inputText}
-                onChange={(event) => setInputText(event.target.value)}
+                language="plaintext"
+                theme={theme}
+                onChange={setInputText}
                 placeholder="粘贴样本内容用于快速解析"
-                className="preview-textarea"
+                renderWhitespace="all"
               />
             )}
           </div>
@@ -1266,7 +1461,7 @@ export default function TestResults() {
           <div className="test-results-panel-header">
             <span className="test-results-panel-title" style={{ color: 'var(--text-primary)' }}>解析结果</span>
             {displayResults.length > 0 ? (
-              <>
+              <div className="test-results-panel-actions">
                 {failedCount > 0 && (
                   <span className="ui-tag ui-tag-red">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1276,11 +1471,25 @@ export default function TestResults() {
                   </span>
                 )}
                 {batchJob && (
-                  <span className="ml-auto truncate" style={{ color: 'var(--text-muted)' }}>
+                  <span className="truncate" style={{ color: 'var(--text-muted)' }}>
                     {batchJob.completedTasks}/{batchJob.totalTasks} 任务 · {getProgressPercent(batchJob)}%
                   </span>
                 )}
-              </>
+                {currentResult && (
+                  <button
+                    type="button"
+                    className="btn test-results-copy-button"
+                    onClick={() => { void handleCopyCurrentResult() }}
+                    title="复制当前解析结果"
+                  >
+                    {copyResultState?.key === currentResult.key
+                      ? copyResultState.status === 'copied'
+                        ? '已复制'
+                        : '复制失败'
+                      : '复制'}
+                  </button>
+                )}
+              </div>
             ) : (
               <span style={{ color: 'var(--text-muted)' }}>暂无结果</span>
             )}
@@ -1369,40 +1578,49 @@ export default function TestResults() {
               </div>
             ) : (
               <div>
-                {displayResults.map((item, index) => (
-                  <div
-                    key={item.key}
-                    onClick={() => setSelectedResultIndex(index)}
-                    className="test-results-result-row"
-                    style={{
-                      backgroundColor: selectedResultIndex === index ? 'var(--accent-subtle)' : 'transparent',
-                      border: selectedResultIndex === index ? '1px solid var(--accent)' : '1px solid transparent'
-                    }}
-                  >
-                    <div className="flex items-start gap-2">
-                      <div className="mt-0.5">
-                        <ResultStatePill success={item.success} />
+                {displayResults.map((item, index) => {
+                  const hwsysname = item.success ? getResultHwsysname(item.result) : null
+                  const fileName = getLeafFileName(item.fileName)
+
+                  return (
+                    <div
+                      key={item.key}
+                      onClick={() => setSelectedResultIndex(index)}
+                      className="test-results-result-row"
+                      style={{
+                        backgroundColor: selectedResultIndex === index ? 'var(--accent-subtle)' : 'transparent',
+                        border: selectedResultIndex === index ? '1px solid var(--accent)' : '1px solid transparent'
+                      }}
+                    >
+                      <div className="flex items-start gap-2">
+                        <div className="mt-0.5">
+                          <ResultStatePill success={item.success} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="test-results-row-title" title={hwsysname || fileName}>
+                            {hwsysname || fileName}
+                          </p>
+                          <p className="test-results-row-meta" title={`${item.templateName} · ${fileName}`}>
+                            {item.templateName} · {fileName}
+                          </p>
+                          {!item.success && item.error && (
+                            <p className="test-results-row-error">{item.error}</p>
+                          )}
+                        </div>
+                        <button
+                          className="test-results-remove-button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setExcludedResultKeys((prev) => new Set([...prev, item.key]))
+                          }}
+                          title="移除此结果"
+                        >
+                          ×
+                        </button>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="test-results-row-title">{getLeafFileName(item.fileName)}</p>
-                        <p className="test-results-row-meta">{item.templateName}</p>
-                        {!item.success && item.error && (
-                          <p className="test-results-row-error">{item.error}</p>
-                        )}
-                      </div>
-                      <button
-                        className="test-results-remove-button"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          setExcludedResultKeys((prev) => new Set([...prev, item.key]))
-                        }}
-                        title="移除此结果"
-                      >
-                        ×
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
                 {batchResultsPage && (
                   <div className="pager">
                     <button

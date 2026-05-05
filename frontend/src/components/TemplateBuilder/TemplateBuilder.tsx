@@ -19,6 +19,18 @@ import ContextMenu from './ContextMenu'
 
 const VARIABLE_COLORS = Array.from({ length: 12 }, (_, index) => getVariableColor(index))
 const EDITOR_FONT_FAMILY = "'JetBrains Mono', 'Consolas', 'Microsoft YaHei', monospace"
+const TEMPLATE_EDITOR_THEMES = {
+  dark: 'ttp-template-builder-dark',
+  light: 'ttp-template-builder-light'
+} as const
+const SAMPLE_INDICATORS = [
+  { value: '_line_', description: '整行匹配' },
+  { value: '_start_', description: '从当前位置开始匹配' },
+  { value: '_exact_', description: '精确匹配文本' },
+  { value: '_exact_space_', description: '精确匹配空格' }
+] as const
+const DEFAULT_SAMPLE_INDICATORS = [SAMPLE_INDICATORS[0].value]
+const SAMPLE_INDICATOR_VALUES = new Set<string>(SAMPLE_INDICATORS.map((indicator) => indicator.value))
 
 // Current selection state for the modal
 interface CurrentSelection {
@@ -237,6 +249,56 @@ function refreshEditorFontMetrics(
   })
 }
 
+function defineTemplateEditorThemes(monaco: typeof import('monaco-editor')) {
+  monaco.editor.defineTheme(TEMPLATE_EDITOR_THEMES.dark, {
+    base: 'vs-dark',
+    inherit: true,
+    rules: [
+      { token: '', foreground: 'e6edf3' },
+      { token: 'tag', foreground: 'f97316' },
+      { token: 'attribute.name', foreground: '79c0ff' },
+      { token: 'attribute.value', foreground: 'a5d6ff' },
+      { token: 'delimiter', foreground: '8b949e' }
+    ],
+    colors: {
+      'editor.background': '#0d1117',
+      'editor.foreground': '#e6edf3',
+      'editorCursor.foreground': '#58a6ff',
+      'editorLineNumber.foreground': '#6e7681',
+      'editorLineNumber.activeForeground': '#e6edf3',
+      'editor.selectionBackground': '#388bfd33',
+      'editor.inactiveSelectionBackground': '#388bfd22',
+      'editorWhitespace.foreground': '#8b949e99'
+    }
+  })
+
+  monaco.editor.defineTheme(TEMPLATE_EDITOR_THEMES.light, {
+    base: 'vs',
+    inherit: true,
+    rules: [
+      { token: '', foreground: '1f2328' },
+      { token: 'tag', foreground: 'bc4c00' },
+      { token: 'attribute.name', foreground: '0969da' },
+      { token: 'attribute.value', foreground: '0a3069' },
+      { token: 'delimiter', foreground: '57606a' }
+    ],
+    colors: {
+      'editor.background': '#ffffff',
+      'editor.foreground': '#1f2328',
+      'editorCursor.foreground': '#0969da',
+      'editorLineNumber.foreground': '#8c959f',
+      'editorLineNumber.activeForeground': '#24292f',
+      'editor.selectionBackground': '#0969da26',
+      'editor.inactiveSelectionBackground': '#0969da16',
+      'editorWhitespace.foreground': '#57606a99'
+    }
+  })
+}
+
+function getTemplateEditorTheme(theme: 'light' | 'dark') {
+  return theme === 'dark' ? TEMPLATE_EDITOR_THEMES.dark : TEMPLATE_EDITOR_THEMES.light
+}
+
 function createRange(
   monaco: typeof import('monaco-editor'),
   model: editor.ITextModel,
@@ -302,6 +364,38 @@ function getGroupTrackingRange(
     group.endLine,
     model.getLineMaxColumn(group.endLine)
   )
+}
+
+function getSampleIndicatorDecorations(
+  monaco: typeof import('monaco-editor'),
+  model: editor.ITextModel
+): editor.IModelDeltaDecoration[] {
+  const decorations: editor.IModelDeltaDecoration[] = []
+  const text = model.getValue()
+  const indicatorPattern = /_exact_space_|_exact_|_line_|_start_/g
+
+  for (const match of text.matchAll(indicatorPattern)) {
+    const indicator = match[0]
+    if (!SAMPLE_INDICATOR_VALUES.has(indicator)) {
+      continue
+    }
+
+    const startOffset = match.index ?? 0
+    const endOffset = startOffset + indicator.length
+    const startPosition = model.getPositionAt(startOffset)
+    const endPosition = model.getPositionAt(endOffset)
+
+    decorations.push({
+      range: new monaco.Range(startPosition.lineNumber, startPosition.column, endPosition.lineNumber, endPosition.column),
+      options: {
+        inlineClassName: `sample-indicator-highlight sample-indicator-highlight-${indicator.replace(/_/g, '')}`,
+        inlineClassNameAffectsLetterSpacing: true,
+        stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges
+      }
+    })
+  }
+
+  return decorations
 }
 
 function getGeneratedTemplateDecorations(
@@ -556,6 +650,8 @@ export default function TemplateBuilder() {
   const [isSavingTemplate, setIsSavingTemplate] = useState(false)
   const [isExportingTemplates, setIsExportingTemplates] = useState(false)
   const [isImportingTemplates, setIsImportingTemplates] = useState(false)
+  const [showIndicatorPicker, setShowIndicatorPicker] = useState(false)
+  const [selectedSampleIndicators, setSelectedSampleIndicators] = useState<string[]>(DEFAULT_SAMPLE_INDICATORS)
   const pendingSyncFrameRef = useRef<number | null>(null)
 
   const {
@@ -861,12 +957,9 @@ export default function TemplateBuilder() {
     const model = editorInstance.getModel()
     if (!model) return
 
-    if (variables.length === 0 && groups.length === 0) {
-      decorationsRef.current = editorInstance.deltaDecorations(decorationsRef.current, [])
-      return
-    }
-
-    const newDecorations: editor.IModelDeltaDecoration[] = []
+    const newDecorations: editor.IModelDeltaDecoration[] = [
+      ...getSampleIndicatorDecorations(monaco, model)
+    ]
 
     // Add variable decorations
     variables.forEach((v, index) => {
@@ -960,7 +1053,7 @@ export default function TemplateBuilder() {
       decorationsRef.current,
       newDecorations
     )
-  }, [variables, groups])
+  }, [variables, groups, sampleText])
 
   useEffect(() => {
     if (!isEditorReady) {
@@ -1104,7 +1197,7 @@ export default function TemplateBuilder() {
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [isEditorReady, variables, groups, applyDecorations])
+  }, [isEditorReady, variables, groups, sampleText, applyDecorations])
 
   useEffect(() => {
     if (!generatedEditorRef.current || !generatedMonacoRef.current) {
@@ -1125,10 +1218,10 @@ export default function TemplateBuilder() {
   // Update editor theme when app theme changes
   useEffect(() => {
     if (monacoRef.current && editorRef.current) {
-      monacoRef.current.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
+      monacoRef.current.editor.setTheme(getTemplateEditorTheme(theme))
     }
     if (generatedMonacoRef.current && generatedEditorRef.current) {
-      generatedMonacoRef.current.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
+      generatedMonacoRef.current.editor.setTheme(getTemplateEditorTheme(theme))
     }
   }, [theme])
 
@@ -1186,28 +1279,8 @@ export default function TemplateBuilder() {
     editorRef.current = editorInstance
     monacoRef.current = monaco
     refreshEditorFontMetrics(monaco, editorInstance)
-
-    // Define dark theme
-    monaco.editor.defineTheme('ttp-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#1e1e2e'
-      }
-    })
-
-    // Define light theme
-    monaco.editor.defineTheme('ttp-light', {
-      base: 'vs',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#ffffff'
-      }
-    })
-
-    monaco.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
+    defineTemplateEditorThemes(monaco)
+    monaco.editor.setTheme(getTemplateEditorTheme(theme))
 
     // Add variable action (single line selection)
     editorInstance.addAction({
@@ -1300,27 +1373,8 @@ export default function TemplateBuilder() {
     generatedEditorRef.current = editorInstance
     generatedMonacoRef.current = monaco
     refreshEditorFontMetrics(monaco, editorInstance)
-
-    // Use same themes
-    monaco.editor.defineTheme('ttp-dark', {
-      base: 'vs-dark',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#1e1e2e'
-      }
-    })
-
-    monaco.editor.defineTheme('ttp-light', {
-      base: 'vs',
-      inherit: true,
-      rules: [],
-      colors: {
-        'editor.background': '#ffffff'
-      }
-    })
-
-    monaco.editor.setTheme(theme === 'dark' ? 'ttp-dark' : 'ttp-light')
+    defineTemplateEditorThemes(monaco)
+    monaco.editor.setTheme(getTemplateEditorTheme(theme))
 
     const model = editorInstance.getModel()
     if (model) {
@@ -1407,19 +1461,23 @@ export default function TemplateBuilder() {
     setEditingGroup(null)
   }, [])
 
-  const handleGroupCreated = useCallback((name: string) => {
+  const handleGroupCreated = useCallback((name: string, range: { startLine: number; endLine: number }) => {
     if (!groupSelection) return
 
     if (editingGroup) {
-      updateGroup(editingGroup.id, { name })
+      updateGroup(editingGroup.id, {
+        name,
+        startLine: range.startLine,
+        endLine: range.endLine
+      })
       handleGroupModalClose()
       return
     }
 
     addGroup({
       name,
-      startLine: groupSelection.startLine,
-      endLine: groupSelection.endLine
+      startLine: range.startLine,
+      endLine: range.endLine
     })
 
     handleGroupModalClose()
@@ -1467,6 +1525,60 @@ export default function TemplateBuilder() {
     setNewCategoryInput('')
     setShowTemplateNameModal(true)
   }, [sampleText, generatedTemplate, templateName, selectedSavedTemplateId, selectedSavedTemplate, currentTemplateVendor, currentTemplateCategoryPath, saveTemplate, prepareTemplateForSave])
+
+  const insertSampleIndicatorExpression = useCallback((indicators: string[]) => {
+    const normalizedIndicators = indicators.map((indicator) => indicator.trim()).filter(Boolean)
+
+    if (normalizedIndicators.length === 0) {
+      return
+    }
+
+    const insertion = normalizedIndicators.join('')
+    const editorInstance = editorRef.current
+    const model = editorInstance?.getModel()
+
+    if (!editorInstance || !model) {
+      setSampleText(`${sampleText}${sampleText ? '\n' : ''}${insertion}`)
+      return
+    }
+
+    const selection = editorInstance.getSelection()
+    const lineNumber = model.getLineCount()
+    const column = model.getLineMaxColumn(lineNumber)
+    const range = selection || {
+      startLineNumber: lineNumber,
+      startColumn: column,
+      endLineNumber: lineNumber,
+      endColumn: column
+    }
+
+    editorInstance.pushUndoStop()
+    editorInstance.executeEdits('insert-indicator', [
+      {
+        range,
+        text: insertion,
+        forceMoveMarkers: true
+      }
+    ])
+    editorInstance.pushUndoStop()
+    setSampleText(model.getValue())
+    editorInstance.focus()
+  }, [sampleText, setSampleText])
+
+  const handleToggleSampleIndicator = useCallback((indicator: string) => {
+    setSelectedSampleIndicators((currentIndicators) => {
+      if (currentIndicators.includes(indicator)) {
+        return currentIndicators.filter((currentIndicator) => currentIndicator !== indicator)
+      }
+
+      return [...currentIndicators, indicator]
+    })
+  }, [])
+
+  const handleInsertSampleIndicator = useCallback(() => {
+    insertSampleIndicatorExpression(selectedSampleIndicators)
+    setShowIndicatorPicker(false)
+  }, [insertSampleIndicatorExpression, selectedSampleIndicators])
 
   const handleTemplateNameSubmit = useCallback(async () => {
     const name = templateNameInput || 'data'
@@ -1705,7 +1817,6 @@ export default function TemplateBuilder() {
           <button
             onClick={newTemplate}
             className="btn"
-            disabled={!sampleText && !generatedTemplate && variables.length === 0 && groups.length === 0 && !templateName && !selectedSavedTemplateId}
           >
             新建
           </button>
@@ -1734,6 +1845,7 @@ export default function TemplateBuilder() {
             activeTemplateId={selectedSavedTemplateId}
             manageDirectories
             onTemplateClick={(templateId) => { void handleLoadTemplate(templateId) }}
+            onRenameTemplate={(templateId, name) => useStore.getState().renameTemplate(templateId, name)}
             onMoveTemplate={(templateId, vendor, categoryPath) => useStore.getState().moveTemplate(templateId, vendor, categoryPath)}
             onDeleteTemplate={(templateId) => { void handleDeleteTemplate(templateId) }}
             onCreateVendor={(name) => useStore.getState().createVendor(name)}
@@ -1754,16 +1866,66 @@ export default function TemplateBuilder() {
                 <span className="sample-editor-title-main">样本输入</span>
                 <span className="sample-editor-title-hint">右键选择文本 → 添加变量 / 组</span>
               </div>
-              <button
-                type="button"
-                onClick={() => { void handleSaveTemplate('sample') }}
-                disabled={isSavingTemplate || !sampleText.trim()}
-                className="btn px-2 py-1 text-xs"
-                style={{ fontSize: '12px', padding: '2px 8px' }}
-                title="保存样本输入并重新生成模板"
-              >
-                保存样本
-              </button>
+              <div className="flex items-center gap-2">
+                <div className="sample-indicator-picker-wrap">
+                  <button
+                    type="button"
+                    onClick={() => setShowIndicatorPicker((isOpen) => !isOpen)}
+                    className="btn px-2 py-1 text-xs"
+                    style={{ fontSize: '12px', padding: '2px 8px' }}
+                    title="选择并在当前光标处插入 Indicator"
+                    aria-expanded={showIndicatorPicker}
+                  >
+                    Indicator
+                  </button>
+                  {showIndicatorPicker && (
+                    <div className="sample-indicator-picker" role="dialog" aria-label="选择 Indicator">
+                      <div className="sample-indicator-list">
+                        {SAMPLE_INDICATORS.map((indicator) => (
+                          <label key={indicator.value} className="sample-indicator-option">
+                            <input
+                              type="checkbox"
+                              checked={selectedSampleIndicators.includes(indicator.value)}
+                              onChange={() => handleToggleSampleIndicator(indicator.value)}
+                            />
+                            <span className="sample-indicator-name">{indicator.value}</span>
+                            <span className="sample-indicator-description">{indicator.description}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="sample-indicator-actions">
+                        <button
+                          type="button"
+                          className="btn px-2 py-1 text-xs"
+                          style={{ fontSize: '12px', padding: '2px 8px' }}
+                          onClick={() => setShowIndicatorPicker(false)}
+                        >
+                          取消
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-primary px-2 py-1 text-xs"
+                          style={{ fontSize: '12px', padding: '2px 8px' }}
+                          disabled={selectedSampleIndicators.length === 0}
+                          onClick={handleInsertSampleIndicator}
+                        >
+                          插入
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { void handleSaveTemplate('sample') }}
+                  disabled={isSavingTemplate || !sampleText.trim()}
+                  className="btn px-2 py-1 text-xs"
+                  style={{ fontSize: '12px', padding: '2px 8px' }}
+                  title="保存样本输入并重新生成模板"
+                >
+                  保存样本
+                </button>
+              </div>
             </div>
             <div className="template-editor-body">
               <Editor
@@ -1775,6 +1937,8 @@ export default function TemplateBuilder() {
                 options={{
                   minimap: { enabled: false },
                   lineNumbers: 'on',
+                  lineNumbersMinChars: 3,
+                  lineDecorationsWidth: 4,
                   wordWrap: 'on',
                   fontSize: 13,
                   lineHeight: 20,
@@ -1825,11 +1989,14 @@ export default function TemplateBuilder() {
                 options={{
                   minimap: { enabled: false },
                   lineNumbers: 'on',
+                  lineNumbersMinChars: 3,
+                  lineDecorationsWidth: 4,
                   wordWrap: 'on',
                   fontSize: 13,
                   lineHeight: 20,
                   fontFamily: EDITOR_FONT_FAMILY,
                   padding: { top: 8 },
+                  renderWhitespace: 'all',
                   scrollBeyondLastLine: false,
                   automaticLayout: true
                 }}
@@ -1881,6 +2048,7 @@ export default function TemplateBuilder() {
           selectedText={groupSelection.text}
           startLine={groupSelection.startLine}
           endLine={groupSelection.endLine}
+          sampleText={sampleText}
           mode={editingGroup ? 'edit' : 'create'}
           initialName={editingGroup?.name}
           onConfirm={handleGroupCreated}

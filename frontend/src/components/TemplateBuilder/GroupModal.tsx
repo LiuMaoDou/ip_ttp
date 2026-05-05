@@ -5,9 +5,18 @@ interface GroupModalProps {
   selectedText: string
   startLine: number
   endLine: number
+  sampleText: string
   initialName?: string
-  onConfirm: (name: string) => void
+  onConfirm: (name: string, range: { startLine: number; endLine: number }) => void
   onCancel: () => void
+}
+
+function clampLine(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) {
+    return min
+  }
+
+  return Math.min(Math.max(Math.trunc(value), min), max)
 }
 
 export default function GroupModal({
@@ -15,13 +24,22 @@ export default function GroupModal({
   selectedText,
   startLine,
   endLine,
+  sampleText,
   initialName,
   onConfirm,
   onCancel
 }: GroupModalProps) {
   const [name, setName] = useState('')
+  const [draftStartLine, setDraftStartLine] = useState(startLine)
+  const [draftEndLine, setDraftEndLine] = useState(endLine)
 
-  const lineCount = endLine - startLine + 1
+  const maxLine = Math.max(1, sampleText.split('\n').length)
+  const normalizedStartLine = clampLine(draftStartLine, 1, maxLine)
+  const normalizedEndLine = clampLine(draftEndLine, normalizedStartLine, maxLine)
+  const lineCount = normalizedEndLine - normalizedStartLine + 1
+  const previewText = sampleText
+    ? sampleText.split('\n').slice(normalizedStartLine - 1, normalizedEndLine).join('\n')
+    : selectedText
 
   useEffect(() => {
     if (initialName) {
@@ -39,10 +57,18 @@ export default function GroupModal({
     setName(defaultName || 'group')
   }, [initialName, selectedText])
 
+  useEffect(() => {
+    setDraftStartLine(startLine)
+    setDraftEndLine(endLine)
+  }, [startLine, endLine])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (name.trim()) {
-      onConfirm(name.trim())
+      onConfirm(name.trim(), {
+        startLine: normalizedStartLine,
+        endLine: normalizedEndLine
+      })
     }
   }
 
@@ -57,14 +83,14 @@ export default function GroupModal({
           {/* Preview */}
           <div className="mb-4 p-3 rounded-md" style={{ backgroundColor: 'var(--bg-tertiary)' }}>
             <label className="block text-xs mb-1" style={{ color: 'var(--text-muted)' }}>
-              已选行（{lineCount} 行：{startLine}-{endLine}）
+              已选行（{lineCount} 行：{normalizedStartLine}-{normalizedEndLine}）
             </label>
             <pre className="text-sm max-h-32 overflow-auto font-mono" style={{ color: '#f97316' }}>
-              {selectedText.substring(0, 200)}{selectedText.length > 200 ? '...' : ''}
+              {previewText.substring(0, 200)}{previewText.length > 200 ? '...' : ''}
             </pre>
           </div>
 
-          <div className="mb-6">
+          <div className="mb-4">
             <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>组名</label>
             <input
               type="text"
@@ -75,6 +101,33 @@ export default function GroupModal({
               style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
               autoFocus
             />
+          </div>
+
+          <div className="mb-6 grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>起始行</label>
+              <input
+                type="number"
+                min={1}
+                max={maxLine}
+                value={draftStartLine}
+                onChange={(e) => setDraftStartLine(Number(e.target.value))}
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-2" style={{ color: 'var(--text-primary)' }}>结束行</label>
+              <input
+                type="number"
+                min={normalizedStartLine}
+                max={maxLine}
+                value={draftEndLine}
+                onChange={(e) => setDraftEndLine(Number(e.target.value))}
+                className="w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2"
+                style={{ backgroundColor: 'var(--bg-tertiary)', borderColor: 'var(--border-color)', color: 'var(--text-primary)' }}
+              />
+            </div>
           </div>
 
           {/* Preview template syntax */}

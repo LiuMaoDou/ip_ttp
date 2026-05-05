@@ -22,6 +22,7 @@ interface TemplateDirectoryTreeProps<TTemplate extends DirectoryTemplate> {
   manageDirectories?: boolean
   onTemplateClick?: (templateId: string) => void
   onTemplateToggle?: (templateId: string) => void
+  onRenameTemplate?: (templateId: string, name: string) => Promise<void>
   onMoveTemplate?: (templateId: string, vendor: string, categoryPath: string[]) => Promise<void>
   onDeleteTemplate?: (templateId: string) => void
   onCreateVendor?: (name: string) => Promise<void>
@@ -39,6 +40,13 @@ interface CategoryNode extends TemplateCategory {
 
 function joinPath(segments: string[]): string {
   return segments.join('/')
+}
+
+function templateTooltip(template: DirectoryTemplate): string {
+  const location = [template.vendor, ...template.categoryPath, template.name]
+    .filter(Boolean)
+    .join('/')
+  return template.description ? `${location}\n${template.description}` : location
 }
 
 function FolderIcon() {
@@ -124,6 +132,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
   manageDirectories = false,
   onTemplateClick,
   onTemplateToggle,
+  onRenameTemplate,
   onMoveTemplate,
   onDeleteTemplate,
   onCreateVendor,
@@ -292,6 +301,14 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
     setMoveCategoryPath(joinPath(template.categoryPath))
   }
 
+  const handlePromptRenameTemplate = async (template: TTemplate) => {
+    const nextName = window.prompt('Rename template', template.name)
+    if (!nextName?.trim() || nextName.trim() === template.name || !onRenameTemplate) {
+      return
+    }
+    await onRenameTemplate(template.id, nextName.trim())
+  }
+
   const handleConfirmMoveTemplate = async () => {
     if (!moveTarget || !onMoveTemplate || !moveVendor.trim()) {
       return
@@ -324,6 +341,13 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
     const isActive = activeTemplateId === template.id
     const isSelected = selectedTemplateIds.includes(template.id)
     const menuItems: ActionMenuItem[] = []
+    if (!multiSelect && onRenameTemplate) {
+      menuItems.push({
+        key: 'rename-template',
+        label: 'Rename template',
+        onSelect: () => handlePromptRenameTemplate(template)
+      })
+    }
     if (!multiSelect && onMoveTemplate) {
       menuItems.push({
         key: 'move-template',
@@ -350,6 +374,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
       >
         <div
           className="template-tree-template-row"
+          title={templateTooltip(template)}
           onClick={() => {
             if (multiSelect) {
               onTemplateToggle?.(template.id)
@@ -429,6 +454,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
       <div key={category.id} className="template-tree-group">
         <div
           className="template-tree-row template-tree-category-row"
+          title={[vendor, ...category.path].join('/')}
           onClick={() => {
             if (hasChildren) {
               toggleCategoryCollapsed(category.id)
@@ -571,6 +597,7 @@ export default function TemplateDirectoryTree<TTemplate extends DirectoryTemplat
               <div key={vendor} className="template-tree-group">
                 <div
                   className="template-tree-row template-tree-vendor-row"
+                  title={vendor}
                   onClick={() => {
                     if (hasContent) {
                       toggleVendorCollapsed(vendor)

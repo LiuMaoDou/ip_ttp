@@ -49,6 +49,37 @@ export type {
 
 export type VariableSyntaxMode = 'variable' | 'ignore' | 'headers' | 'end'
 
+const SAMPLE_INDICATOR_TOKEN_PATTERN = /_exact_space_|_exact_|_line_|_start_/g
+
+function convertSampleIndicatorsToTemplateSyntax(text: string): string {
+  let result = ''
+  let currentIndex = 0
+
+  while (currentIndex < text.length) {
+    const expressionStart = text.indexOf('{{', currentIndex)
+    const rawSegmentEnd = expressionStart === -1 ? text.length : expressionStart
+
+    result += text
+      .slice(currentIndex, rawSegmentEnd)
+      .replace(SAMPLE_INDICATOR_TOKEN_PATTERN, (indicator) => `{{ ${indicator} }}`)
+
+    if (expressionStart === -1) {
+      break
+    }
+
+    const expressionEnd = text.indexOf('}}', expressionStart + 2)
+    if (expressionEnd === -1) {
+      result += text.slice(expressionStart)
+      break
+    }
+
+    result += text.slice(expressionStart, expressionEnd + 2)
+    currentIndex = expressionEnd + 2
+  }
+
+  return result
+}
+
 export interface Variable {
   id: string
   name: string
@@ -206,6 +237,7 @@ interface AppState {
   updateCategory: (templateKind: TemplateKind, categoryId: string, vendor: string, name: string, parentId?: string | null) => Promise<void>
   deleteCategory: (templateKind: TemplateKind, categoryId: string) => Promise<void>
   saveTemplate: (name: string, description: string, vendor: string, categoryPath: string[], source?: TemplateSaveSource) => Promise<void>
+  renameTemplate: (id: string, name: string) => Promise<void>
   moveTemplate: (id: string, vendor: string, categoryPath: string[]) => Promise<void>
   loadTemplate: (id: string) => Promise<void>
   deleteTemplate: (id: string) => Promise<void>
@@ -253,6 +285,8 @@ const VARIABLE_COLORS = [
   '#ec4899', '#84cc16', '#6366f1', '#14b8a6', '#f97316', '#8b5cf6'
 ]
 const DEFAULT_VENDOR = 'Unassigned'
+const DEFAULT_TEMPLATE_SAMPLE_TEXT = '#\nsysname hwSysName\n#'
+const DEFAULT_TEMPLATE_GENERATED_TEXT = '<group name="system">\nsysname {{ hwsysname | WORD }}\n</group>'
 
 function createVariableId() {
   return `var-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`
@@ -602,8 +636,9 @@ export const useStore = create<AppState>()(
           .filter((group): group is Group => group !== null)
 
         if (preparedVariables.length === 0 && preparedGroups.length === 0) {
-          set({ generatedTemplate: sampleText })
-          return sampleText
+          const generatedTemplate = convertSampleIndicatorsToTemplateSyntax(sampleText)
+          set({ generatedTemplate })
+          return generatedTemplate
         }
 
         const sortedVars = [...preparedVariables].sort((a, b) => {
@@ -615,7 +650,7 @@ export const useStore = create<AppState>()(
         const result: string[] = []
 
         const replaceVariablesInLine = (line: string, lineVars: PreparedVariable[]) => {
-          if (lineVars.length === 0) return line
+          if (lineVars.length === 0) return convertSampleIndicatorsToTemplateSyntax(line)
 
           let modifiedLine = line
           const sortedByCol = [...lineVars].sort((a, b) => b.startColumn - a.startColumn)
@@ -646,7 +681,7 @@ export const useStore = create<AppState>()(
             modifiedLine = prefix + replacement + suffix
           })
 
-          return modifiedLine
+          return convertSampleIndicatorsToTemplateSyntax(modifiedLine)
         }
 
         const varsByLine = new Map<number, PreparedVariable[]>()
@@ -765,10 +800,10 @@ export const useStore = create<AppState>()(
       }),
 
       newTemplate: () => set({
-        sampleText: '',
+        sampleText: DEFAULT_TEMPLATE_SAMPLE_TEXT,
         variables: [],
         groups: [],
-        generatedTemplate: '',
+        generatedTemplate: DEFAULT_TEMPLATE_GENERATED_TEXT,
         templateName: '',
         currentTemplateVendor: DEFAULT_VENDOR,
         currentTemplateCategoryPath: [],
@@ -889,6 +924,36 @@ export const useStore = create<AppState>()(
           currentTemplateCategoryPath: normalizeCategoryPath(categoryPath),
           selectedSavedTemplateId: savedTemplateId
         })
+      },
+
+      renameTemplate: async (id, name) => {
+        const nextName = name.trim()
+        if (!nextName) {
+          return
+        }
+
+        const state = get()
+        const template = state.savedTemplates.find((item) => item.id === id)
+        if (!template || template.name === nextName) {
+          return
+        }
+
+        await updateTemplate(id, {
+          name: nextName,
+          description: template.description,
+          vendor: template.vendor || DEFAULT_VENDOR,
+          categoryPath: normalizeCategoryPath(template.categoryPath),
+          sampleText: template.sampleText,
+          variables: template.variables,
+          groups: template.groups,
+          generatedTemplate: template.generatedTemplate
+        })
+
+        await get().fetchSavedTemplates()
+
+        if (get().selectedSavedTemplateId === id) {
+          set({ templateName: nextName })
+        }
       },
 
       moveTemplate: async (id, vendor, categoryPath) => {

@@ -6,6 +6,7 @@ interface CodeEditorProps {
   theme: 'dark' | 'light'
   readOnly?: boolean
   wordWrap?: 'on' | 'off'
+  renderWhitespace?: 'none' | 'boundary' | 'selection' | 'trailing' | 'all'
   placeholder?: string
   onChange?: (value: string) => void
   onMount?: OnMount
@@ -29,6 +30,7 @@ const beforeMount: BeforeMount = (monaco) => {
       'editorLineNumber.activeForeground': '#8b949e',
       'editorCursor.foreground': '#58a6ff',
       'editor.selectionBackground': '#388bfd33',
+      'editorWhitespace.foreground': '#8b949e99',
       'editor.lineHighlightBackground': '#161b2266',
       'editorIndentGuide.background1': '#21262d',
       'editorIndentGuide.activeBackground1': '#30363d',
@@ -53,6 +55,7 @@ const beforeMount: BeforeMount = (monaco) => {
       'editorLineNumber.activeForeground': '#57606a',
       'editorCursor.foreground': '#0969da',
       'editor.selectionBackground': '#0969da22',
+      'editorWhitespace.foreground': '#57606a99',
       'editor.lineHighlightBackground': '#f6f8fa',
       'editorIndentGuide.background1': '#e8ecf0',
       'editorIndentGuide.activeBackground1': '#d0d7de',
@@ -68,6 +71,7 @@ export function CodeEditor({
   theme,
   readOnly = false,
   wordWrap = 'on',
+  renderWhitespace = 'none',
   placeholder,
   onChange,
   onMount
@@ -96,6 +100,7 @@ export function CodeEditor({
           lineNumbers: 'on',
           lineNumbersMinChars: 3,
           wordWrap,
+          renderWhitespace,
           automaticLayout: true,
           scrollBeyondLastLine: false,
           renderLineHighlight: readOnly ? 'none' : 'line',
